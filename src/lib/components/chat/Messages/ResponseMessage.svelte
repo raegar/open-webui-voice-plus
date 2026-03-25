@@ -659,33 +659,6 @@
 			<div>
 				<div class="chat-{message.role} w-full min-w-full markdown-prose">
 					<div>
-						{#if model?.info?.meta?.capabilities?.status_updates ?? true}
-							<StatusHistory statusHistory={message?.statusHistory} />
-						{/if}
-
-						{#if message?.files && message.files?.filter((f) => f.type === 'image').length > 0}
-							<div
-								class="my-1 w-full flex overflow-x-auto gap-2 flex-wrap"
-								dir={$settings?.chatDirection ?? 'auto'}
-							>
-								{#each message.files as file}
-									<div>
-										{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
-											<Image src={file.url} alt={message.content} />
-										{:else}
-											<FileItem
-												item={file}
-												url={file.url}
-												name={file.name}
-												type={file.type}
-												size={file?.size}
-												small={true}
-											/>
-										{/if}
-									</div>
-								{/each}
-							</div>
-						{/if}
 
 						{#if message?.embeds && message.embeds.length > 0}
 							<div
@@ -841,6 +814,32 @@
 
 							{#if message.code_executions}
 								<CodeExecutions codeExecutions={message.code_executions} />
+							{/if}
+							{#if model?.info?.meta?.capabilities?.status_updates ?? true}
+								<StatusHistory statusHistory={message?.statusHistory} />
+							{/if}
+							{#if message?.files && message.files?.filter((f) => f.type === 'image').length > 0}
+								<div
+										class="my-1 w-full flex overflow-x-auto gap-2 flex-wrap"
+										dir={$settings?.chatDirection ?? 'auto'}
+								>
+										{#each message.files as file}
+												<div>
+														{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
+																<Image src={file.url} alt={message.content} />
+														{:else}
+																<FileItem
+																		item={file}
+																		url={file.url}
+																		name={file.name}
+																		type={file.type}
+																		size={file?.size}
+																		small={true}
+																/>
+														{/if}
+												</div>
+										{/each}
+								</div>
 							{/if}
 						</div>
 					</div>
