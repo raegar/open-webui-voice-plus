@@ -1522,6 +1522,13 @@ async def chat_image_generation_handler(
     if not chat_id or not isinstance(chat_id, str) or not __event_emitter__:
         return form_data
 
+    await __event_emitter__(
+        {
+            "type": "status",
+            "data": {"description": "Requesting image", "done": False},
+        }
+    )
+
     if chat_id.startswith("local:"):
         message_list = form_data.get("messages", [])
     else:
