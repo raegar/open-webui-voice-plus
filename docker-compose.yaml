@@ -1,32 +1,43 @@
 services:
-  ollama:
-    volumes:
-      - ollama:/root/.ollama
-    container_name: ollama
-    pull_policy: always
-    tty: true
-    restart: unless-stopped
-    image: ollama/ollama:${OLLAMA_DOCKER_TAG-latest}
-
   open-webui:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/open-webui/open-webui:${WEBUI_DOCKER_TAG-main}
+    image: open-webui-voice-plus:latest
     container_name: open-webui
+    restart: always
+    ports:
+      - "3000:8080"
     volumes:
       - open-webui:/app/backend/data
-    depends_on:
-      - ollama
-    ports:
-      - ${OPEN_WEBUI_PORT-3000}:8080
-    environment:
-      - 'OLLAMA_BASE_URL=http://ollama:11434'
-      - 'WEBUI_SECRET_KEY='
     extra_hosts:
       - host.docker.internal:host-gateway
-    restart: unless-stopped
+    environment:
+      - ENABLE_IMAGE_GENERATION=True
+      - AUTOMATIC1111_BASE_URL=http://host.docker.internal:7860
+      - |
+        IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE=### Task:
+        Extract or generate an image generation prompt based on the assistant's most recent response in the chat history. The assistant may have described a scene, character, or image it wants to create — your job is to distill that into a clean, detailed image generation prompt.
+
+        ### Guidelines:
+        - Focus primarily on the assistant's last message for visual details
+        - Extract specific details: subject, appearance, setting, lighting, mood, style
+        - If the assistant explicitly described what it wants to generate, use that description faithfully
+        - Do not include conversational text, names, or narrative — only visual elements
+        - Be specific about colours, materials, poses, expressions, environment
+        - Use the chat's primary language; default to English if multilingual
+
+        ### Output:
+        Strictly return in JSON format:
+        {
+            "prompt": "Your detailed visual description here."
+        }
+
+        ### Chat History:
+        <chat_history>
+        {{MESSAGES:END:6}}
+        </chat_history>
 
 volumes:
-  ollama: {}
-  open-webui: {}
+  open-webui:
+    external: true   # existing named volume — all chat history and settings preserved
