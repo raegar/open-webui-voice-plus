@@ -441,7 +441,8 @@ async def generate_image_prompt(
     else:
         template = DEFAULT_IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE
 
-    content = image_prompt_generation_template(template, form_data["messages"], user)
+    image_model = request.app.state.config.IMAGE_GENERATION_MODEL or ""
+    content = image_prompt_generation_template(template, form_data["messages"], user, image_model)
 
     payload = {
         "model": task_model_id,
