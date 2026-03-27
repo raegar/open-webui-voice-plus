@@ -1522,13 +1522,6 @@ async def chat_image_generation_handler(
     if not chat_id or not isinstance(chat_id, str) or not __event_emitter__:
         return form_data
 
-    await __event_emitter__(
-        {
-            "type": "status",
-            "data": {"description": "Requesting image", "done": False},
-        }
-    )
-
     if chat_id.startswith("local:"):
         message_list = form_data.get("messages", [])
     else:
@@ -3026,6 +3019,15 @@ async def non_streaming_chat_response_handler(response, ctx):
                                 },
                             )
 
+                    # Emit Requesting image before background tasks so it
+                    # appears after the completion event clears the status
+                    if metadata.get("features", {}).get("image_generation"):
+                        await event_emitter(
+                            {
+                                "type": "status",
+                                "data": {"description": "Requesting image", "done": False},
+                            }
+                        )
                     await background_tasks_handler(ctx)
 
             response = build_response_object(
