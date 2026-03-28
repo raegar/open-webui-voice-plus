@@ -4527,6 +4527,16 @@ async def streaming_chat_response_handler(response, ctx):
                     }
                 )
 
+                # Emit Requesting image before background tasks so it appears
+                # after the completion event clears the status display
+                if metadata.get("features", {}).get("image_generation"):
+                    await event_emitter(
+                        {
+                            "type": "status",
+                            "data": {"description": "Requesting image", "done": False},
+                        }
+                    )
+
                 await background_tasks_handler(ctx)
             except asyncio.CancelledError:
                 log.warning("Task was cancelled!")
