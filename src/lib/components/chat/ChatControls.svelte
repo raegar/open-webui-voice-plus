@@ -40,6 +40,25 @@
 	export let history;
 	export let models = [];
 
+	// Derive latest generated image from chat history for CallOverlay display
+	$: latestGeneratedImage = (() => {
+		if (!history?.messages) return null;
+		const msgs = Object.values(history.messages);
+		for (let i = msgs.length - 1; i >= 0; i--) {
+			const msgFiles = msgs[i]?.files ?? [];
+			const img = msgFiles.find((f) =>
+				f.type === "image" ||
+				(f?.content_type ?? "").startsWith("image/") ||
+				!!(f?.url ?? "").match(/\.(png|jpg|jpeg|webp|gif)/i)
+			);
+			if (img?.url) {
+				console.log("[VoiceOverlay] found image:", img.url);
+				return img.url;
+			}
+		}
+		return null;
+	})()
+
 	export let chatId = null;
 
 	export let chatFiles = [];
