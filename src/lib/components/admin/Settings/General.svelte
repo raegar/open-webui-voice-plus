@@ -790,6 +790,13 @@
 						/>
 					</div>
 
+								<div class="mb-2.5 flex w-full justify-between">
+									<div class=" self-center text-xs font-medium">
+										{$i18n.t('Replace Em-Dashes with Semicolons')}
+									</div>
+									<Switch bind:state={adminConfig.REPLACE_EMDASH_WITH_SEMICOLON} />
+								</div>
+
 					<div class="mb-2.5 w-full justify-between">
 						<div class="flex w-full justify-between">
 							<div class=" self-center text-xs font-medium">{$i18n.t('WebUI URL')}</div>

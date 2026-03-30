@@ -1349,6 +1349,12 @@ RESPONSE_WATERMARK = PersistentConfig(
     os.environ.get("RESPONSE_WATERMARK", ""),
 )
 
+REPLACE_EMDASH_WITH_SEMICOLON = PersistentConfig(
+    "REPLACE_EMDASH_WITH_SEMICOLON",
+    "ui.replace_emdash_with_semicolon",
+    os.environ.get("REPLACE_EMDASH_WITH_SEMICOLON", "False").lower() == "true",
+)
+
 
 USER_PERMISSIONS_WORKSPACE_MODELS_ACCESS = (
     os.environ.get("USER_PERMISSIONS_WORKSPACE_MODELS_ACCESS", "False").lower()

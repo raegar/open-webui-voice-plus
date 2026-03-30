@@ -4479,6 +4479,14 @@ async def streaming_chat_response_handler(response, ctx):
                         item["status"] = "completed"
 
                 title = Chats.get_chat_title_by_id(metadata["chat_id"])
+                # Replace em-dashes with semicolons if setting is enabled
+                if request.app.state.config.REPLACE_EMDASH_WITH_SEMICOLON:
+                    content = content.replace("\u2014", "; ").replace("\u2013", "; ")
+                    for item in output:
+                        if item.get("type") == "message":
+                            for part in item.get("content", []):
+                                if part.get("type") == "output_text":
+                                    part["text"] = part["text"].replace("\u2014", "; ").replace("\u2013", "; ")
                 data = {
                     "done": True,
                     "content": serialize_output(output),
