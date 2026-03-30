@@ -23,6 +23,7 @@
 	export let files;
 	export let chatId;
 	export let modelId;
+	export let generatedImageUrl: string | null = null;
 
 	let wakeLock = null;
 	let model = null;
@@ -706,6 +707,20 @@
 	<div class="flex flex-col items-center justify-center flex-1 gap-10">
 
 		{#if !camera}
+			<!-- Generated image preview card -->
+			{#if generatedImageUrl}
+				<div class="w-full px-9 flex justify-center" style="max-height:180px;margin-bottom:1rem;">
+					<div class="relative rounded-2xl overflow-hidden" style="max-height:180px;">
+						<img src={generatedImageUrl} alt="Generated"
+							style="width:100%;height:100%;object-fit:cover;border-radius:1rem;
+							       box-shadow:0 4px 24px rgba(0,0,0,0.6);" />
+						<div style="position:absolute;bottom:8px;right:10px;
+							    font-size:9px;letter-spacing:0.06em;text-transform:uppercase;
+							    color:rgba(255,255,255,0.5);">Latest image</div>
+					</div>
+				</div>
+			{/if}
+
 			<!-- Avatar with live-driven ripple rings -->
 			<div class="relative flex items-center justify-center" style="width:180px;height:180px;">
 

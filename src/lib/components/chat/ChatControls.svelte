@@ -278,6 +278,7 @@
 							{modelId}
 							{chatId}
 							{eventTarget}
+							generatedImageUrl={latestGeneratedImage}
 							on:close={() => showControls.set(false)}
 						/>
 					</div>
@@ -424,6 +425,7 @@
 								{modelId}
 								{chatId}
 								{eventTarget}
+								generatedImageUrl={latestGeneratedImage}
 								on:close={() => showControls.set(false)}
 							/>
 						</div>
