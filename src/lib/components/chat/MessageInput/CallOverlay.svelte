@@ -673,7 +673,7 @@
 
 {#if $showCallOverlay}
 <div class="max-w-lg w-full h-full max-h-[100dvh] flex flex-col justify-between"
-	 style="background:#000;">
+	 style="background:#000;position:relative;">
 	<div style="position:absolute;top:8px;right:12px;font-size:9px;letter-spacing:0.05em;color:rgba(255,255,255,0.12);z-index:10;pointer-events:none;">v1.2.0</div>
 
 	<!-- ── Status top ─────────────────────────────────────────────────────── -->
