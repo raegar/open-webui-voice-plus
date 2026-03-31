@@ -43,6 +43,7 @@
 	import Skeleton from './Skeleton.svelte';
 	import Image from '$lib/components/common/Image.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import ArrowPath from '$lib/components/icons/ArrowPath.svelte';
 	import RateComment from './RateComment.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import WebSearchResults from './ResponseMessage/WebSearchResults.svelte';
@@ -65,6 +66,7 @@
 
 	interface MessageType {
 		id: string;
+		parentId?: string;
 		model: string;
 		content: string;
 		files?: { type: string; url: string }[];
@@ -180,6 +182,46 @@
 	let loadingSpeech = false;
 
 	let showRateComment = false;
+
+	let regeneratingImage = false;
+
+	const regenerateImage = async () => {
+		if (!message.parentId) return;
+		const parentMessage = history.messages[message.parentId];
+		if (!parentMessage) return;
+
+		let prompt = '';
+		if (Array.isArray(parentMessage.content)) {
+			prompt = parentMessage.content
+				.filter((p: any) => p.type === 'text')
+				.map((p: any) => p.text)
+				.join(' ');
+		} else {
+			prompt = parentMessage.content;
+		}
+
+		if (!prompt) return;
+
+		regeneratingImage = true;
+		try {
+			const images = await imageGenerations(localStorage.token, prompt);
+			if (images) {
+				const nonImageFiles = (message.files ?? []).filter((f) => f.type !== 'image');
+				const newFiles = [
+					...nonImageFiles,
+					...images.map((img: any) => ({ type: 'image', url: img.url }))
+				];
+				await saveMessage(messageId, {
+					...history.messages[messageId],
+					files: newFiles
+				});
+			}
+		} catch (e) {
+			toast.error(typeof e === 'string' ? e : $i18n.t('Failed to regenerate image'));
+		} finally {
+			regeneratingImage = false;
+		}
+	};
 
 	const copyToClipboard = async (text) => {
 		text = removeAllDetails(text);
@@ -840,6 +882,24 @@
 												</div>
 										{/each}
 								</div>
+								{#if message.done && !readOnly}
+									<div class="flex mt-0.5">
+										<Tooltip content={$i18n.t('Regenerate Image')} placement="top">
+											<button
+												type="button"
+												class="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded-md transition text-gray-500 dark:text-gray-400 disabled:opacity-50"
+												on:click={regenerateImage}
+												disabled={regeneratingImage}
+											>
+												{#if regeneratingImage}
+													<Spinner className="size-4" />
+												{:else}
+													<ArrowPath className="size-4" />
+												{/if}
+											</button>
+										</Tooltip>
+									</div>
+								{/if}
 							{/if}
 						</div>
 					</div>
