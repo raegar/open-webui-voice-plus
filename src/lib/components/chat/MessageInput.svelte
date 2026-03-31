@@ -1755,7 +1755,7 @@
 											{#if imageGenerationModels.length > 1}
 												<select
 													bind:value={imageGenerationModel}
-													class="text-xs rounded-full px-2 py-1 border border-sky-200/40 dark:border-sky-500/20 bg-sky-50 dark:bg-sky-400/10 text-sky-500 dark:text-sky-300 focus:outline-none"
+													class="text-xs rounded-full px-2 py-1 border border-sky-200/40 dark:border-sky-500/20 bg-sky-50 dark:bg-sky-400/10 text-sky-500 dark:text-sky-300 focus:outline-none max-w-[5rem] sm:max-w-none"
 												>
 													<option value="">Default</option>
 													{#each imageGenerationModels as m}
