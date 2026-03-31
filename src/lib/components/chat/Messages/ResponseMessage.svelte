@@ -43,7 +43,7 @@
 	import Skeleton from './Skeleton.svelte';
 	import Image from '$lib/components/common/Image.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
-	import ArrowPath from '$lib/components/icons/ArrowPath.svelte';
+	import Photo from '$lib/components/icons/Photo.svelte';
 	import RateComment from './RateComment.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import WebSearchResults from './ResponseMessage/WebSearchResults.svelte';
@@ -889,24 +889,6 @@
 												</div>
 										{/each}
 								</div>
-								{#if message.done && !readOnly}
-									<div class="flex mt-0.5">
-										<Tooltip content={$i18n.t('Regenerate Image')} placement="top">
-											<button
-												type="button"
-												class="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded-md transition text-gray-500 dark:text-gray-400 disabled:opacity-50"
-												on:click={regenerateImage}
-												disabled={regeneratingImage}
-											>
-												{#if regeneratingImage}
-													<Spinner className="size-4" />
-												{:else}
-													<ArrowPath className="size-4" />
-												{/if}
-											</button>
-										</Tooltip>
-									</div>
-								{/if}
 							{/if}
 						</div>
 					</div>
@@ -1433,6 +1415,24 @@
 												</button>
 											</Tooltip>
 										{/if}
+									{/if}
+
+									{#if message.done && !readOnly && (message.files ?? []).some((f) => f.type === 'image')}
+										<Tooltip content={$i18n.t('Regenerate Image')} placement="bottom">
+											<button
+												type="button"
+												aria-label={$i18n.t('Regenerate Image')}
+												class="p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition disabled:opacity-50"
+												on:click={regenerateImage}
+												disabled={regeneratingImage}
+											>
+												{#if regeneratingImage}
+													<Spinner className="size-4" />
+												{:else}
+													<Photo className="size-4" strokeWidth="2.3" />
+												{/if}
+											</button>
+										</Tooltip>
 									{/if}
 
 									{#if $user?.role === 'admin' || ($user?.permissions?.chat?.delete_message ?? true)}
