@@ -69,7 +69,7 @@
 		parentId?: string;
 		model: string;
 		content: string;
-		files?: { type: string; url: string }[];
+		files?: { type: string; url: string; prompt?: string; content_type?: string; name?: string; size?: number }[];
 		timestamp: number;
 		role: string;
 		statusHistory?: {
@@ -186,18 +186,25 @@
 	let regeneratingImage = false;
 
 	const regenerateImage = async () => {
-		if (!message.parentId) return;
-		const parentMessage = history.messages[message.parentId];
-		if (!parentMessage) return;
+		// Prefer the stored prompt from the file metadata (the LLM-enhanced prompt used originally).
+		// Fall back to the raw parent user message if no stored prompt exists (older messages).
+		const storedPrompt = (message.files ?? []).find((f) => f.type === 'image' && f.prompt)?.prompt;
 
-		let prompt = '';
-		if (Array.isArray(parentMessage.content)) {
-			prompt = parentMessage.content
-				.filter((p: any) => p.type === 'text')
-				.map((p: any) => p.text)
-				.join(' ');
-		} else {
-			prompt = parentMessage.content;
+		let prompt = storedPrompt ?? '';
+
+		if (!prompt) {
+			if (!message.parentId) return;
+			const parentMessage = history.messages[message.parentId];
+			if (!parentMessage) return;
+
+			if (Array.isArray(parentMessage.content)) {
+				prompt = parentMessage.content
+					.filter((p: any) => p.type === 'text')
+					.map((p: any) => p.text)
+					.join(' ');
+			} else {
+				prompt = parentMessage.content;
+			}
 		}
 
 		if (!prompt) return;

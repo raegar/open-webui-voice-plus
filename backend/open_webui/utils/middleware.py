@@ -1584,6 +1584,7 @@ async def chat_image_generation_handler(
                             {
                                 "type": "image",
                                 "url": image["url"],
+                                "prompt": prompt,
                             }
                             for image in images
                         ]
@@ -1682,6 +1683,7 @@ async def chat_image_generation_handler(
                             {
                                 "type": "image",
                                 "url": image["url"],
+                                "prompt": prompt,
                             }
                             for image in images
                         ]
