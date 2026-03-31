@@ -145,6 +145,7 @@
 	let selectedFilterIds = [];
 
 	let imageGenerationEnabled = false;
+	let imageGenerationModel = '';
 	let webSearchEnabled = false;
 	let codeInterpreterEnabled = false;
 
@@ -194,6 +195,7 @@
 		selectedFilterIds = [];
 		webSearchEnabled = false;
 		imageGenerationEnabled = false;
+		imageGenerationModel = '';
 
 		const storageChatInput = sessionStorage.getItem(
 			`chat-input${chatIdProp ? `-${chatIdProp}` : ''}`
@@ -241,6 +243,7 @@
 						selectedFilterIds = input.selectedFilterIds;
 						webSearchEnabled = input.webSearchEnabled;
 						imageGenerationEnabled = input.imageGenerationEnabled;
+						imageGenerationModel = input.imageGenerationModel ?? '';
 						codeInterpreterEnabled = input.codeInterpreterEnabled;
 					}
 				} catch (e) {}
@@ -301,6 +304,7 @@
 		selectedFilterIds = [];
 		webSearchEnabled = false;
 		imageGenerationEnabled = false;
+		imageGenerationModel = '';
 		codeInterpreterEnabled = false;
 
 		if (selectedModelIds.filter((id) => id).length > 0) {
@@ -713,6 +717,7 @@
 				selectedFilterIds = [];
 				webSearchEnabled = false;
 				imageGenerationEnabled = false;
+				imageGenerationModel = '';
 				codeInterpreterEnabled = false;
 
 				try {
@@ -725,6 +730,7 @@
 						selectedFilterIds = input.selectedFilterIds;
 						webSearchEnabled = input.webSearchEnabled;
 						imageGenerationEnabled = input.imageGenerationEnabled;
+						imageGenerationModel = input.imageGenerationModel ?? '';
 						codeInterpreterEnabled = input.codeInterpreterEnabled;
 					}
 				} catch (e) {}
@@ -1983,6 +1989,7 @@
 					($user?.role === 'admin' || $user?.permissions?.features?.image_generation)
 						? imageGenerationEnabled
 						: false,
+				image_generation_model: imageGenerationModel || undefined,
 				code_interpreter:
 					$config?.features?.enable_code_interpreter &&
 					($user?.role === 'admin' || $user?.permissions?.features?.code_interpreter)
@@ -2805,6 +2812,7 @@
 									bind:selectedToolIds
 									bind:selectedFilterIds
 									bind:imageGenerationEnabled
+									bind:imageGenerationModel
 									bind:codeInterpreterEnabled
 									bind:webSearchEnabled
 									bind:atSelectedModel
@@ -2876,6 +2884,7 @@
 									bind:selectedToolIds
 									bind:selectedFilterIds
 									bind:imageGenerationEnabled
+									bind:imageGenerationModel
 									bind:codeInterpreterEnabled
 									bind:webSearchEnabled
 									bind:atSelectedModel

@@ -1553,12 +1553,15 @@ async def chat_image_generation_handler(
 
     system_message_content = ""
 
+    features = metadata.get("features", {})
+    image_model = features.get("image_generation_model") or None
+
     if len(input_images) > 0 and request.app.state.config.ENABLE_IMAGE_EDIT:
         # Edit image(s)
         try:
             images = await image_edits(
                 request=request,
-                form_data=EditImageForm(**{"prompt": prompt, "image": input_images}),
+                form_data=EditImageForm(**{"prompt": prompt, "image": input_images, **({"model": image_model} if image_model else {})}),
                 metadata={
                     "chat_id": metadata.get("chat_id", None),
                     "message_id": metadata.get("message_id", None),
@@ -1656,7 +1659,7 @@ async def chat_image_generation_handler(
         try:
             images = await image_generations(
                 request=request,
-                form_data=CreateImageForm(**{"prompt": prompt}),
+                form_data=CreateImageForm(**{"prompt": prompt, **({"model": image_model} if image_model else {})}),
                 metadata={
                     "chat_id": metadata.get("chat_id", None),
                     "message_id": metadata.get("message_id", None),

@@ -57,6 +57,7 @@
 	import { deleteFileById } from '$lib/apis/files';
 	import { getSessionUser } from '$lib/apis/auths';
 	import { getTools } from '$lib/apis/tools';
+	import { getImageGenerationModels } from '$lib/apis/images';
 
 	import { WEBUI_BASE_URL, WEBUI_API_BASE_URL, PASTED_TEXT_CHARACTER_LIMIT } from '$lib/constants';
 
@@ -129,8 +130,19 @@
 	export let selectedFilterIds = [];
 
 	export let imageGenerationEnabled = false;
+	export let imageGenerationModel = '';
 	export let webSearchEnabled = false;
 	export let codeInterpreterEnabled = false;
+
+	let imageGenerationModels: { id: string; name: string }[] = [];
+
+	$: if (imageGenerationEnabled && imageGenerationModels.length === 0) {
+		getImageGenerationModels(localStorage.token)
+			.then((models: { id: string; name: string }[] | null) => {
+				imageGenerationModels = models ?? [];
+			})
+			.catch(() => {});
+	}
 
 	let showTerminalMenu = false;
 
@@ -169,6 +181,7 @@
 		selectedToolIds,
 		selectedFilterIds,
 		imageGenerationEnabled,
+		imageGenerationModel,
 		webSearchEnabled,
 		codeInterpreterEnabled
 	});
@@ -1722,6 +1735,7 @@
 										{/if}
 
 										{#if imageGenerationEnabled}
+											<div class="flex items-center gap-1">
 											<Tooltip content={$i18n.t('Image')} placement="top">
 												<button
 													on:click|preventDefault={() =>
@@ -1737,6 +1751,19 @@
 													</div>
 												</button>
 											</Tooltip>
+
+											{#if imageGenerationModels.length > 1}
+												<select
+													bind:value={imageGenerationModel}
+													class="text-xs rounded-full px-2 py-1 border border-sky-200/40 dark:border-sky-500/20 bg-sky-50 dark:bg-sky-400/10 text-sky-500 dark:text-sky-300 focus:outline-none"
+												>
+													<option value="">Default</option>
+													{#each imageGenerationModels as m}
+														<option value={m.id}>{m.name || m.id}</option>
+													{/each}
+												</select>
+											{/if}
+											</div>
 										{/if}
 
 										{#if codeInterpreterEnabled}
