@@ -43,7 +43,7 @@
 	import Skeleton from './Skeleton.svelte';
 	import Image from '$lib/components/common/Image.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
-	import Photo from '$lib/components/icons/Photo.svelte';
+	import PhotoRefresh from '$lib/components/icons/PhotoRefresh.svelte';
 	import RateComment from './RateComment.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import WebSearchResults from './ResponseMessage/WebSearchResults.svelte';
@@ -1429,7 +1429,7 @@
 												{#if regeneratingImage}
 													<Spinner className="size-4" />
 												{:else}
-													<Photo className="size-4" strokeWidth="2.3" />
+													<PhotoRefresh className="size-4" strokeWidth="2.3" />
 												{/if}
 											</button>
 										</Tooltip>
