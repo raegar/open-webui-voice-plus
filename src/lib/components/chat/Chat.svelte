@@ -347,10 +347,7 @@
 				const modelDefaultFilters = ((model?.info?.meta?.defaultFilterIds ?? []) as string[]).filter((id) =>
 					model?.filters?.find((f: { id: string }) => f.id === id)
 				);
-				const memoryFilterIds = defaultMemoryFilterIds().filter((id) =>
-					model?.filters?.find((f) => f.id === id)
-				);
-				selectedFilterIds = [...new Set([...modelDefaultFilters, ...memoryFilterIds])];
+				selectedFilterIds = [...new Set([...modelDefaultFilters, ...defaultMemoryFilterIds()])];
 			}
 
 			// Set Default Features
