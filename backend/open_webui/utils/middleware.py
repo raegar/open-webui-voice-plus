@@ -2135,6 +2135,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     variables = form_data.pop("variables", None)
 
     # Process the form_data through the pipeline
+    # Reinject filter_ids so external pipeline filters can check toggle state
+    form_data["filter_ids"] = metadata.get("filter_ids", [])
     try:
         form_data = await process_pipeline_inlet_filter(
             request, form_data, user, models
