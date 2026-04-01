@@ -1313,7 +1313,7 @@
 				...(m.usage ? { usage: m.usage } : {}),
 				...(m.sources ? { sources: m.sources } : {})
 			})),
-			filter_ids: selectedFilterIds.length > 0 ? selectedFilterIds : undefined,
+			filter_ids: selectedFilterIds,
 			model_item: $models.find((m) => m.id === modelId),
 			chat_id: _chatId,
 			session_id: $socket?.id,
@@ -2210,7 +2210,7 @@
 
 				files: (files?.length ?? 0) > 0 ? files : undefined,
 
-				filter_ids: selectedFilterIds.length > 0 ? selectedFilterIds : undefined,
+				filter_ids: selectedFilterIds,
 				tool_ids: toolIds.length > 0 ? toolIds : undefined,
 				skill_ids: skillIds.length > 0 ? skillIds : undefined,
 				terminal_id: activeTerminalId ?? undefined,

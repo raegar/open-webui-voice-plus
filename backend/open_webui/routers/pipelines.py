@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 ##################################
 
 
-def get_sorted_filters(model_id, models):
+def get_sorted_filters(model_id, models, filter_ids=None):
     filters = [
         model
         for model in models.values()
@@ -50,6 +50,11 @@ def get_sorted_filters(model_id, models):
                 for target_model_id in model["pipeline"]["pipelines"]
             )
         )
+        and (
+            not model.get("info", {}).get("meta", {}).get("toggle", False)
+            or filter_ids is None
+            or model["id"] in filter_ids
+        )
     ]
     sorted_filters = sorted(filters, key=lambda x: x["pipeline"]["priority"])
     return sorted_filters
@@ -58,7 +63,8 @@ def get_sorted_filters(model_id, models):
 async def process_pipeline_inlet_filter(request, payload, user, models):
     user = {"id": user.id, "email": user.email, "name": user.name, "role": user.role}
     model_id = payload["model"]
-    sorted_filters = get_sorted_filters(model_id, models)
+    filter_ids = payload.get("filter_ids")
+    sorted_filters = get_sorted_filters(model_id, models, filter_ids)
     model = models[model_id]
 
     if "pipeline" in model:
@@ -111,7 +117,8 @@ async def process_pipeline_inlet_filter(request, payload, user, models):
 async def process_pipeline_outlet_filter(request, payload, user, models):
     user = {"id": user.id, "email": user.email, "name": user.name, "role": user.role}
     model_id = payload["model"]
-    sorted_filters = get_sorted_filters(model_id, models)
+    filter_ids = payload.get("filter_ids")
+    sorted_filters = get_sorted_filters(model_id, models, filter_ids)
     model = models[model_id]
 
     if "pipeline" in model:

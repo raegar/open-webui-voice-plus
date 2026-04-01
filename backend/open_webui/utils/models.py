@@ -394,6 +394,24 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
                     get_filter_items_from_module(filter_function, function_module)
                 )
 
+        # Add toggleable external pipeline filters (not stored in function table)
+        for pfm in models:
+            if pfm["id"] == model["id"]:
+                continue
+            if pfm.get("pipeline", {}).get("type") != "filter":
+                continue
+            if not pfm.get("info", {}).get("meta", {}).get("toggle", False):
+                continue
+            pipeline_pipes = pfm["pipeline"].get("pipelines", [])
+            if pipeline_pipes == ["*"] or model["id"] in pipeline_pipes:
+                model["filters"].append({
+                    "id": pfm["id"],
+                    "name": pfm.get("name", pfm["id"]),
+                    "description": pfm.get("info", {}).get("meta", {}).get("description"),
+                    "icon": pfm.get("info", {}).get("meta", {}).get("profile_image_url"),
+                    "has_user_valves": pfm.get("pipeline", {}).get("valves", False),
+                })
+
     log.debug(f"get_all_models() returned {len(models)} models")
 
     models_dict = {model["id"]: model for model in models}
