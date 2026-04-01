@@ -23,6 +23,7 @@ from open_webui.constants import ERROR_MESSAGES
 
 
 from open_webui.routers.openai import get_all_models_responses
+from open_webui.models.models import Models
 
 from open_webui.utils.auth import get_admin_user
 
@@ -34,6 +35,14 @@ log = logging.getLogger(__name__)
 # Pipeline Middleware
 #
 ##################################
+
+
+def _is_toggleable_pipeline(pipeline_id: str) -> bool:
+    """Check DB directly whether this pipeline model has toggle=true in its meta."""
+    model = Models.get_model_by_id(pipeline_id)
+    if model and model.meta:
+        return bool(getattr(model.meta, "toggle", False))
+    return False
 
 
 def get_sorted_filters(model_id, models, filter_ids=None):
@@ -51,7 +60,7 @@ def get_sorted_filters(model_id, models, filter_ids=None):
             )
         )
         and (
-            not model.get("info", {}).get("meta", {}).get("toggle", False)
+            not _is_toggleable_pipeline(model["id"])
             or filter_ids is None
             or model["id"] in filter_ids
         )
