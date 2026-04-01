@@ -142,7 +142,11 @@
 	}
 
 	let selectedToolIds = [];
-	let selectedFilterIds = [];
+	const MEMORY_FILTER_ID = 'persistent_memory_filter';
+	const defaultMemoryFilterIds = () =>
+		localStorage.getItem('memoryRecordingEnabled') !== 'false' ? [MEMORY_FILTER_ID] : [];
+
+	let selectedFilterIds = defaultMemoryFilterIds();
 
 	let imageGenerationEnabled = false;
 	let imageGenerationModel = '';
@@ -192,7 +196,7 @@
 		files = [];
 		messageQueue = [];
 		selectedToolIds = [];
-		selectedFilterIds = [];
+		selectedFilterIds = defaultMemoryFilterIds();
 		webSearchEnabled = false;
 		imageGenerationEnabled = false;
 		imageGenerationModel = '';
@@ -301,7 +305,7 @@
 
 	const resetInput = () => {
 		selectedToolIds = [];
-		selectedFilterIds = [];
+		selectedFilterIds = defaultMemoryFilterIds();
 		webSearchEnabled = false;
 		imageGenerationEnabled = false;
 		imageGenerationModel = '';
@@ -339,10 +343,14 @@
 			}
 
 			// Set Default Filters (Toggleable only)
-			if (model?.info?.meta?.defaultFilterIds) {
-				selectedFilterIds = model.info.meta.defaultFilterIds.filter((id) =>
+			{
+				const modelDefaultFilters = ((model?.info?.meta?.defaultFilterIds ?? []) as string[]).filter((id) =>
+					model?.filters?.find((f: { id: string }) => f.id === id)
+				);
+				const memoryFilterIds = defaultMemoryFilterIds().filter((id) =>
 					model?.filters?.find((f) => f.id === id)
 				);
+				selectedFilterIds = [...new Set([...modelDefaultFilters, ...memoryFilterIds])];
 			}
 
 			// Set Default Features
@@ -714,7 +722,7 @@
 
 				files = [];
 				selectedToolIds = [];
-				selectedFilterIds = [];
+				selectedFilterIds = defaultMemoryFilterIds();
 				webSearchEnabled = false;
 				imageGenerationEnabled = false;
 				imageGenerationModel = '';
@@ -953,6 +961,11 @@
 	};
 
 	$: onHistoryChange(history);
+
+	$: localStorage.setItem(
+		'memoryRecordingEnabled',
+		selectedFilterIds.includes(MEMORY_FILTER_ID) ? 'true' : 'false'
+	);
 
 	const getContents = () => {
 		const messages = history ? createMessagesList(history, history.currentId) : [];
