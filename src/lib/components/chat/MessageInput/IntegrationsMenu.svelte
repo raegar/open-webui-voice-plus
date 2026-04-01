@@ -221,6 +221,37 @@
 						{/each}
 					{/if}
 
+					<Tooltip content={$i18n.t('Record memories from this conversation')} placement="top-start">
+						<button
+							class="flex w-full justify-between gap-2 items-center px-3 py-1.5 text-sm cursor-pointer rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800/50"
+							on:click={() => {
+								const id = 'persistent_memory_filter';
+								if (selectedFilterIds.includes(id)) {
+									selectedFilterIds = selectedFilterIds.filter((f) => f !== id);
+								} else {
+									selectedFilterIds = [...selectedFilterIds, id];
+								}
+							}}
+						>
+							<div class="flex-1 truncate">
+								<div class="flex flex-1 gap-2 items-center">
+									<div class="shrink-0">
+										<Sparkles />
+									</div>
+									<div class=" truncate">{$i18n.t('Memory')}</div>
+								</div>
+							</div>
+							<div class=" shrink-0">
+								<Switch
+									state={selectedFilterIds.includes('persistent_memory_filter')}
+									on:change={async () => {
+										await tick();
+									}}
+								/>
+							</div>
+						</button>
+					</Tooltip>
+
 					{#if showWebSearchButton}
 						<Tooltip content={$i18n.t('Search the internet')} placement="top-start">
 							<button
