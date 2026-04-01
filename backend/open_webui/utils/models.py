@@ -387,7 +387,9 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
             if function_module is None:
                 log.info(f"Failed to load filter module: {filter_id}")
                 continue
-            if getattr(function_module, "toggle", None):
+            if getattr(function_module, "toggle", None) or getattr(
+                filter_function.meta, "toggle", False
+            ):
                 model["filters"].extend(
                     get_filter_items_from_module(filter_function, function_module)
                 )

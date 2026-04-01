@@ -43,8 +43,12 @@ def get_sorted_filter_ids(request, model: dict, enabled_filter_ids: list = None)
 
     def get_active_status(filter_id):
         function_module = get_function_module(request, filter_id)
+        function = Functions.get_function_by_id(filter_id)
 
-        if getattr(function_module, "toggle", None):
+        is_toggle = getattr(function_module, "toggle", None) or (
+            function and getattr(function.meta, "toggle", False)
+        )
+        if is_toggle:
             return filter_id in (enabled_filter_ids or [])
 
         return True
