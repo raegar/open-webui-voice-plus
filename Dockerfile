@@ -11,10 +11,15 @@ COPY --from=builder /build/build /app/build
 # Python backend patches (not part of the npm build)
 COPY --from=builder /build/backend/open_webui/utils/middleware.py /app/backend/open_webui/utils/middleware.py
 COPY --from=builder /build/backend/open_webui/utils/task.py /app/backend/open_webui/utils/task.py
+COPY --from=builder /build/backend/open_webui/utils/tools.py /app/backend/open_webui/utils/tools.py
+# Patch tools.py — add has_tool_server_access stub (referenced by middleware.py but missing from fork)
+RUN printf '\n\ndef has_tool_server_access(user, server_connection: dict) -> bool:\n    return True\n' >> /app/backend/open_webui/utils/tools.py
 COPY --from=builder /build/backend/open_webui/routers/tasks.py /app/backend/open_webui/routers/tasks.py
-COPY --from=builder /build/backend/open_webui/config.py /app/backend/open_webui/config.py
 COPY --from=builder /build/backend/open_webui/routers/auths.py /app/backend/open_webui/routers/auths.py
-# Patch main.py in place — add REPLACE_EMDASH_WITH_SEMICOLON import and app.state assignment
+# Patch main.py — add REPLACE_EMDASH_WITH_SEMICOLON import and app.state assignment
 RUN sed -i 's/    RESPONSE_WATERMARK,$/    RESPONSE_WATERMARK,\n    REPLACE_EMDASH_WITH_SEMICOLON,/' /app/backend/open_webui/main.py
 RUN sed -i 's/app\.state\.config\.RESPONSE_WATERMARK = RESPONSE_WATERMARK/app.state.config.RESPONSE_WATERMARK = RESPONSE_WATERMARK\napp.state.config.REPLACE_EMDASH_WITH_SEMICOLON = REPLACE_EMDASH_WITH_SEMICOLON/' /app/backend/open_webui/main.py
+# Patch config.py — add REPLACE_EMDASH_WITH_SEMICOLON persistent config
+RUN sed -i 's/RESPONSE_WATERMARK = PersistentConfig/REPLACE_EMDASH_WITH_SEMICOLON = PersistentConfig(\n    "REPLACE_EMDASH_WITH_SEMICOLON",\n    "ui.replace_emdash_with_semicolon",\n    os.environ.get("REPLACE_EMDASH_WITH_SEMICOLON", "False") == "True",\n)\n\nRESPONSE_WATERMARK = PersistentConfig/' /app/backend/open_webui/config.py
+# Gmail API libraries for SweetMailBiscuits digest tool
 LABEL description="Open WebUI with adaptive voice threshold"
