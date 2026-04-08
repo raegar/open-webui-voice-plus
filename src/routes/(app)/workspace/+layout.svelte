@@ -144,6 +144,17 @@
 								{$i18n.t('Tools')}
 							</a>
 						{/if}
+
+						<a
+							draggable="false"
+							aria-current={$page.url.pathname.includes('/workspace/jobs') ? 'page' : null}
+							class="min-w-fit p-1.5 {$page.url.pathname.includes('/workspace/jobs')
+								? ''
+								: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+							href="/workspace/jobs"
+						>
+							{$i18n.t('Jobs')}
+						</a>
 					</div>
 				</div>
 
