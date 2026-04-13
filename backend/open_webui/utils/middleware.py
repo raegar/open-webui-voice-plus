@@ -4488,12 +4488,15 @@ async def streaming_chat_response_handler(response, ctx):
                 title = Chats.get_chat_title_by_id(metadata["chat_id"])
                 # Replace em-dashes with semicolons if setting is enabled
                 if request.app.state.config.REPLACE_EMDASH_WITH_SEMICOLON:
-                    content = content.replace("\u2014", "; ").replace("\u2013", "; ")
+                    def _replace_dashes(text: str) -> str:
+                        text = re.sub(r'\s+[\u2014\u2013]\s+', ': ', text)
+                        return re.sub(r'[\u2014\u2013]', '; ', text)
+                    content = _replace_dashes(content)
                     for item in output:
                         if item.get("type") == "message":
                             for part in item.get("content", []):
                                 if part.get("type") == "output_text":
-                                    part["text"] = part["text"].replace("\u2014", "; ").replace("\u2013", "; ")
+                                    part["text"] = _replace_dashes(part["text"])
                 data = {
                     "done": True,
                     "content": serialize_output(output),
