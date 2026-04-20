@@ -2,9 +2,10 @@
 FROM ghcr.io/open-webui/open-webui:main AS base
 FROM node:20-slim AS builder
 WORKDIR /build
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 https://github.com/raegar/open-webui-voice-plus.git .
+# Copy local source (avoids git clone cache issues and allows local-only changes)
+COPY package.json package-lock.json* ./
 RUN npm install --legacy-peer-deps
+COPY . .
 RUN npm run build
 FROM base
 COPY --from=builder /build/build /app/build

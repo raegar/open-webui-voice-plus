@@ -5,7 +5,11 @@
       "Bash(curl -s -H \"Authorization: Bearer 0p3n-w3bu!\" http://localhost:9099/models)",
       "Bash(python3 -c \"import sys,json; data=json.load\\(sys.stdin\\); print\\(json.dumps\\(data, indent=2\\)\\)\")",
       "Bash(docker exec:*)",
-      "Bash(docker run:*)"
+      "Bash(docker run:*)",
+      "Bash(grep -n \"replace.*\\\\\\\\\\\\u2014\\\\|replace.*\\\\\\\\\\\\u2013\" /c/AI/open-webui-voice-plus/backend/open_webui/utils/middleware.py)",
+      "Bash(awk -F: '{print $1 \" \" $2}')",
+      "Bash(awk '$1 < 4500 {line=$0} END {print line}')",
+      "Bash(find /c/AI/open-webui-voice-plus -type f -name \"*.py\" -exec grep -l \"speech\\\\|TTS\" {} \\\\;)"
     ]
   }
 }

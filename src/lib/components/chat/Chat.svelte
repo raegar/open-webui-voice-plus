@@ -1629,8 +1629,11 @@
 				navigator.vibrate(5);
 			}
 
-			// Emit chat event for TTS (only when call overlay is active)
-			if ($showCallOverlay) {
+			// Emit chat event for TTS (only when call overlay is active, and not on the
+			// done event — the done event replaces em-dashes with semicolons/colons,
+			// causing lastSentence string comparison to fail and re-dispatch sentences
+			// that were already spoken. The done block below handles the final sentence.
+			if ($showCallOverlay && !done) {
 				const messageContentParts = getMessageContentParts(
 					removeAllDetails(message.content),
 					$config?.audio?.tts?.split_on ?? 'punctuation'
@@ -1685,7 +1688,7 @@
 						removeAllDetails(message.content),
 						$config?.audio?.tts?.split_on ?? 'punctuation'
 					)?.at(-1) ?? '';
-				if (lastMessageContentPart) {
+				if (lastMessageContentPart && lastMessageContentPart !== message.lastSentence) {
 					eventTarget.dispatchEvent(
 						new CustomEvent('chat', {
 							detail: { id: message.id, content: lastMessageContentPart }
