@@ -37,7 +37,7 @@
 	let chatStreaming = false;
 	let rmsLevel = 0;
 	let hasStartedSpeaking = false;
-	let mediaRecorder;
+	let mediaRecorder: MediaRecorder | false;
 	let audioStream = null;
 	let audioChunks = [];
 	let videoInputDevices = [];
@@ -226,9 +226,10 @@
 		return false;
 	};
 
-	const transcribeHandler = async (audioBlob) => {
+	const transcribeHandler = async (audioBlob, mimeType = 'audio/webm') => {
 		await tick();
-		const file = blobToFile(audioBlob, 'recording.wav');
+		const ext = mimeType.split('/')[1]?.split(';')[0] || 'webm';
+		const file = blobToFile(audioBlob, `recording.${ext}`);
 		const res = await transcribeAudio(localStorage.token, file, $settings?.audio?.stt?.language).catch((error) => {
 			toast.error(`${error}`);
 			return null;
@@ -246,6 +247,7 @@
 		if ($showCallOverlay) {
 			console.log('%c%s', 'color: red; font-size: 20px;', '🚨 stopRecordingCallback 🚨');
 			const _audioChunks = audioChunks.slice(0);
+			const _mimeType = (mediaRecorder && typeof mediaRecorder !== 'boolean') ? mediaRecorder.mimeType : 'audio/webm';
 			audioChunks = [];
 			mediaRecorder = false;
 			if (_continue) { startRecording(); }
@@ -255,8 +257,9 @@
 				if (cameraStream) {
 					files = [{ type: 'image', url: takeScreenshot() }];
 				}
-				const audioBlob = new Blob(_audioChunks, { type: 'audio/wav' });
-				await transcribeHandler(audioBlob);
+				const mimeType = _mimeType || 'audio/webm';
+				const audioBlob = new Blob(_audioChunks, { type: mimeType });
+				await transcribeHandler(audioBlob, mimeType);
 				confirmed = false;
 				loading = false;
 			}
