@@ -6,7 +6,8 @@
       "Bash(findstr \":7861\")",
       "Bash(findstr \":7860\")",
       "Bash(curl -s -o nul -w \"%{http_code}\" http://localhost:7861/sdapi/v1/options --max-time 5)",
-      "Bash(docker-compose build *)"
+      "Bash(docker-compose build *)",
+      "Bash(docker-compose up *)"
     ],
     "additionalDirectories": [
       "D:\\Development\\forge-proxy"

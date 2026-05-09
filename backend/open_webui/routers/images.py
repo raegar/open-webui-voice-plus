@@ -455,6 +455,7 @@ def get_models(request: Request, user=Depends(get_verified_user)):
                 headers={"authorization": get_automatic1111_api_auth(request)},
                 timeout=120,
             )
+            r.raise_for_status()
             models = r.json()
             return list(
                 map(
@@ -463,7 +464,6 @@ def get_models(request: Request, user=Depends(get_verified_user)):
                 )
             )
     except Exception as e:
-        request.app.state.config.ENABLE_IMAGE_GENERATION = False
         raise HTTPException(status_code=400, detail=ERROR_MESSAGES.DEFAULT(e))
 
 
