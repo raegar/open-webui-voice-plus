@@ -17,7 +17,7 @@ services:
       - WEBUI_SECRET_KEY=apple-code-minion-hotdog-carpet-mask-snowflake-staple
       - TZ=Europe/London
       - ENABLE_IMAGE_GENERATION=True
-      - AUTOMATIC1111_BASE_URL=http://host.docker.internal:7860
+      - AUTOMATIC1111_BASE_URL=http://host.docker.internal:7861
       - |
         IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE=### Task:
         Extract or generate an image generation prompt based on the assistant's most recent response in the chat history. The assistant may have described a scene, character, or image it wants to create — your job is to distill that into a clean, detailed image generation prompt.

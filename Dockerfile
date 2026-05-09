@@ -17,6 +17,7 @@ COPY --from=builder /build/backend/open_webui/utils/tools.py /app/backend/open_w
 RUN printf '\n\ndef has_tool_server_access(user, server_connection: dict) -> bool:\n    return True\n' >> /app/backend/open_webui/utils/tools.py
 COPY --from=builder /build/backend/open_webui/routers/tasks.py /app/backend/open_webui/routers/tasks.py
 COPY --from=builder /build/backend/open_webui/routers/auths.py /app/backend/open_webui/routers/auths.py
+COPY --from=builder /build/backend/open_webui/routers/images.py /app/backend/open_webui/routers/images.py
 # Patch main.py — add REPLACE_EMDASH_WITH_SEMICOLON import and app.state assignment
 RUN sed -i 's/    RESPONSE_WATERMARK,$/    RESPONSE_WATERMARK,\n    REPLACE_EMDASH_WITH_SEMICOLON,/' /app/backend/open_webui/main.py
 RUN sed -i 's/app\.state\.config\.RESPONSE_WATERMARK = RESPONSE_WATERMARK/app.state.config.RESPONSE_WATERMARK = RESPONSE_WATERMARK\napp.state.config.REPLACE_EMDASH_WITH_SEMICOLON = REPLACE_EMDASH_WITH_SEMICOLON/' /app/backend/open_webui/main.py

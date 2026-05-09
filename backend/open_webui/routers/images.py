@@ -58,6 +58,7 @@ def set_image_model(request: Request, model: str):
             r = requests.get(
                 url=f"{request.app.state.config.AUTOMATIC1111_BASE_URL}/sdapi/v1/options",
                 headers={"authorization": api_auth},
+                timeout=120,
             )
             options = r.json()
             if model != options["sd_model_checkpoint"]:
@@ -66,6 +67,7 @@ def set_image_model(request: Request, model: str):
                     url=f"{request.app.state.config.AUTOMATIC1111_BASE_URL}/sdapi/v1/options",
                     json=options,
                     headers={"authorization": api_auth},
+                    timeout=120,
                 )
         except Exception as e:
             log.debug(f"{e}")
@@ -96,15 +98,17 @@ def get_image_model(request):
         request.app.state.config.IMAGE_GENERATION_ENGINE == "automatic1111"
         or request.app.state.config.IMAGE_GENERATION_ENGINE == ""
     ):
+        r = None
         try:
             r = requests.get(
                 url=f"{request.app.state.config.AUTOMATIC1111_BASE_URL}/sdapi/v1/options",
                 headers={"authorization": get_automatic1111_api_auth(request)},
+                timeout=120,
             )
             options = r.json()
             return options["sd_model_checkpoint"]
         except Exception as e:
-            request.app.state.config.ENABLE_IMAGE_GENERATION = False
+            log.error(f"get_image_model failed: {e!r} | url={request.app.state.config.AUTOMATIC1111_BASE_URL} | status={r.status_code if r is not None else 'no response'} | body={r.text[:500] if r is not None else ''}")
             raise HTTPException(status_code=400, detail=ERROR_MESSAGES.DEFAULT(e))
 
 
@@ -354,11 +358,11 @@ async def verify_url(request: Request, user=Depends(get_admin_user)):
             r = requests.get(
                 url=f"{request.app.state.config.AUTOMATIC1111_BASE_URL}/sdapi/v1/options",
                 headers={"authorization": get_automatic1111_api_auth(request)},
+                timeout=120,
             )
             r.raise_for_status()
             return True
         except Exception:
-            request.app.state.config.ENABLE_IMAGE_GENERATION = False
             raise HTTPException(status_code=400, detail=ERROR_MESSAGES.INVALID_URL)
     elif request.app.state.config.IMAGE_GENERATION_ENGINE == "comfyui":
         headers = None
@@ -374,7 +378,6 @@ async def verify_url(request: Request, user=Depends(get_admin_user)):
             r.raise_for_status()
             return True
         except Exception:
-            request.app.state.config.ENABLE_IMAGE_GENERATION = False
             raise HTTPException(status_code=400, detail=ERROR_MESSAGES.INVALID_URL)
     else:
         return True
@@ -450,6 +453,7 @@ def get_models(request: Request, user=Depends(get_verified_user)):
             r = requests.get(
                 url=f"{request.app.state.config.AUTOMATIC1111_BASE_URL}/sdapi/v1/sd-models",
                 headers={"authorization": get_automatic1111_api_auth(request)},
+                timeout=120,
             )
             models = r.json()
             return list(
@@ -818,6 +822,7 @@ async def image_generations(
                 url=f"{request.app.state.config.AUTOMATIC1111_BASE_URL}/sdapi/v1/txt2img",
                 json=data,
                 headers={"authorization": get_automatic1111_api_auth(request)},
+                timeout=180,
             )
 
             res = r.json()
