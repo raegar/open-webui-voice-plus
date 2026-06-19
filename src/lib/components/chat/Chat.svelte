@@ -458,7 +458,22 @@
 				} else if (type === 'chat:message' || type === 'replace') {
 					message.content = data.content;
 				} else if (type === 'chat:message:files' || type === 'files') {
-					message.files = data.files;
+					const existingFiles = message.files ?? [];
+					message.files = [...existingFiles];
+
+					for (const file of data.files ?? []) {
+						const existingIndex = message.files.findIndex(
+							(existing) =>
+								(existing.url && existing.url === file.url) ||
+								(existing.id && existing.id === file.id)
+						);
+
+						if (existingIndex >= 0) {
+							message.files[existingIndex] = { ...message.files[existingIndex], ...file };
+						} else {
+							message.files.push(file);
+						}
+					}
 				} else if (type === 'chat:message:embeds' || type === 'embeds') {
 					message.embeds = data.embeds;
 
@@ -1945,12 +1960,10 @@
 				const model = $models.filter((m) => m.id === modelId).at(0);
 
 				if (model) {
-					// If there are image files, check if model is vision capable
-					// Skip this check if image generation is enabled, as images may be for editing or are generated outputs in the history
-					const hasImages = createMessagesList(_history, parentId).some((message) =>
-						message.files?.some(
-							(file) => file.type === 'image' || (file?.content_type ?? '').startsWith('image/')
-						)
+					// Historical images are omitted for non-vision models. Only warn when the
+					// current user turn itself contains image input.
+					const hasImages = _history.messages[parentId]?.files?.some(
+						(file) => file.type === 'image' || (file?.content_type ?? '').startsWith('image/')
 					);
 
 					if (
@@ -2047,6 +2060,7 @@
 	const sendMessageSocket = async (model, _messages, _history, responseMessageId, _chatId) => {
 		const responseMessage = _history.messages[responseMessageId];
 		const userMessage = _history.messages[responseMessage.parentId];
+		const supportsVision = model?.info?.meta?.capabilities?.vision ?? true;
 
 		const chatMessageFiles = _messages
 			.filter((message) => message.files)
@@ -2113,9 +2127,13 @@
 
 		messages = messages
 			.map((message, idx, arr) => {
-				const imageFiles = (message?.files ?? []).filter(
-					(file) => file.type === 'image' || (file?.content_type ?? '').startsWith('image/')
-				);
+				const includeImages = supportsVision || message.id === userMessage?.id;
+				const imageFiles = includeImages
+					? (message?.files ?? []).filter(
+							(file) =>
+								file.type === 'image' || (file?.content_type ?? '').startsWith('image/')
+						)
+					: [];
 
 				return {
 					role: message.role,
@@ -2797,6 +2815,7 @@
 											messageInput?.setText(text);
 										}}
 										{selectedModels}
+										{imageGenerationModel}
 										{atSelectedModel}
 										{sendMessage}
 										{showMessage}

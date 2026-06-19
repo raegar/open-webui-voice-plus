@@ -6,7 +6,7 @@ WORKDIR /build
 COPY package.json package-lock.json* ./
 RUN npm install --legacy-peer-deps
 COPY . .
-RUN npm run build
+RUN APP_BUILD_HASH="$(date +%s)" npm run build
 FROM base
 COPY --from=builder /build/build /app/build
 # Python backend patches (not part of the npm build)

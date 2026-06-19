@@ -144,6 +144,10 @@
 			.catch(() => {});
 	}
 
+	const updateImageGenerationModel = (event: Event) => {
+		imageGenerationModel = (event.currentTarget as HTMLSelectElement).value;
+	};
+
 	let showTerminalMenu = false;
 
 	export let messageQueue: { id: string; prompt: string; files: any[] }[] = [];
@@ -1755,6 +1759,8 @@
 											{#if imageGenerationModels.length > 1}
 												<select
 													bind:value={imageGenerationModel}
+													on:input={updateImageGenerationModel}
+													on:change={updateImageGenerationModel}
 													class="text-xs rounded-full px-2 py-1 border border-sky-200/40 dark:border-sky-500/20 bg-sky-50 dark:bg-sky-400/10 text-sky-500 dark:text-sky-300 focus:outline-none max-w-[5rem] sm:max-w-none"
 												>
 													<option value="">Default</option>

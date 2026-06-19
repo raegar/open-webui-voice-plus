@@ -7,10 +7,15 @@
       "Bash(findstr \":7860\")",
       "Bash(curl -s -o nul -w \"%{http_code}\" http://localhost:7861/sdapi/v1/options --max-time 5)",
       "Bash(docker-compose build *)",
-      "Bash(docker-compose up *)"
+      "Bash(docker-compose up *)",
+      "Read(//d/Development/chatterbox-proxy/**)",
+      "Bash(docker start *)",
+      "Bash(curl -s http://localhost:8004/ --max-time 5)",
+      "PowerShell(git add -A)"
     ],
     "additionalDirectories": [
-      "D:\\Development\\forge-proxy"
+      "D:\\Development\\forge-proxy",
+      "D:\\Development\\chatterbox-proxy"
     ]
   }
 }

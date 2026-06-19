@@ -80,6 +80,12 @@
 		return false;
 	};
 
+	let reloadingForUpdate = false;
+	$: if (updated.current && !reloadingForUpdate) {
+		reloadingForUpdate = true;
+		unregisterServiceWorkers().finally(() => location.reload());
+	}
+
 	// handle frontend updates (https://svelte.dev/docs/kit/configuration#version)
 	beforeNavigate(async ({ willUnload, to }) => {
 		if (updated.current && !willUnload && to?.url) {

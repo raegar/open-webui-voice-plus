@@ -1996,6 +1996,23 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 [system_message, *db_messages] if system_message else db_messages
             )
 
+            supports_vision = (
+                model.get("info", {})
+                .get("meta", {})
+                .get("capabilities")
+                or {}
+            ).get(
+                "vision", True
+            )
+            latest_user_message = next(
+                (
+                    message
+                    for message in reversed(form_data["messages"])
+                    if message.get("role") == "user"
+                ),
+                None,
+            )
+
             # Inject image files into content as image_url parts (mirrors frontend logic)
             for message in form_data["messages"]:
                 image_files = [
@@ -2004,7 +2021,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     if f.get("type") == "image"
                     or (f.get("content_type") or "").startswith("image/")
                 ]
-                if message.get("role") == "user" and image_files:
+                include_images = supports_vision or message is latest_user_message
+                if message.get("role") == "user" and image_files and include_images:
                     text_content = message.get("content", "")
                     if isinstance(text_content, str):
                         message["content"] = [

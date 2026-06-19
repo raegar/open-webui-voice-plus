@@ -69,7 +69,15 @@
 		parentId?: string;
 		model: string;
 		content: string;
-		files?: { type: string; url: string; prompt?: string; content_type?: string; name?: string; size?: number }[];
+		files?: {
+			type: string;
+			url: string;
+			prompt?: string;
+			model?: string;
+			content_type?: string;
+			name?: string;
+			size?: number;
+		}[];
 		timestamp: number;
 		role: string;
 		statusHistory?: {
@@ -120,6 +128,7 @@
 	export let history;
 	export let messageId;
 	export let selectedModels = [];
+	export let imageGenerationModel = '';
 
 	let message: MessageType = structuredClone(history.messages[messageId]);
 	$: if (history.messages) {
@@ -186,37 +195,39 @@
 	let regeneratingImage = false;
 
 	const regenerateImage = async () => {
-		// Prefer the stored prompt from the file metadata (the LLM-enhanced prompt used originally).
-		// Fall back to the raw parent user message if no stored prompt exists (older messages).
+		// Prefer the stored LLM-enhanced prompt. Older image messages may not have
+		// prompt metadata, so their descriptive assistant response is the safest fallback.
 		const storedPrompt = (message.files ?? []).find((f) => f.type === 'image' && f.prompt)?.prompt;
 
-		let prompt = storedPrompt ?? '';
-
-		if (!prompt) {
-			if (!message.parentId) return;
-			const parentMessage = history.messages[message.parentId];
-			if (!parentMessage) return;
-
-			if (Array.isArray(parentMessage.content)) {
-				prompt = parentMessage.content
-					.filter((p: any) => p.type === 'text')
-					.map((p: any) => p.text)
-					.join(' ');
-			} else {
-				prompt = parentMessage.content;
-			}
-		}
+		const fallbackPrompt = Array.isArray(message.content)
+			? message.content
+					.filter((part: any) => part.type === 'text')
+					.map((part: any) => part.text)
+					.join(' ')
+			: message.content;
+		const prompt = storedPrompt ?? fallbackPrompt ?? '';
 
 		if (!prompt) return;
 
 		regeneratingImage = true;
 		try {
-			const images = await imageGenerations(localStorage.token, prompt);
+			const images = await imageGenerations(
+				localStorage.token,
+				prompt,
+				imageGenerationModel || undefined,
+				chatId,
+				messageId
+			);
 			if (images) {
 				const nonImageFiles = (message.files ?? []).filter((f) => f.type !== 'image');
 				const newFiles = [
 					...nonImageFiles,
-					...images.map((img: any) => ({ type: 'image', url: img.url }))
+					...images.map((img: any) => ({
+						type: 'image',
+						url: img.url,
+						prompt,
+						...(imageGenerationModel ? { model: imageGenerationModel } : {})
+					}))
 				];
 				await saveMessage(messageId, {
 					...history.messages[messageId],

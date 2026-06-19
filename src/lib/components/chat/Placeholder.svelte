@@ -51,6 +51,7 @@
 	export let showCommands = false;
 
 	export let imageGenerationEnabled = false;
+	export let imageGenerationModel = '';
 	export let codeInterpreterEnabled = false;
 	export let webSearchEnabled = false;
 
@@ -210,6 +211,7 @@
 					bind:selectedToolIds
 					bind:selectedFilterIds
 					bind:imageGenerationEnabled
+					bind:imageGenerationModel
 					bind:codeInterpreterEnabled
 					bind:webSearchEnabled
 					bind:atSelectedModel

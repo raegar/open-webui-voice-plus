@@ -14,6 +14,7 @@
 
 	export let chatId;
 	export let selectedModels = [];
+	export let imageGenerationModel = '';
 	export let idx = 0;
 
 	export let history;
@@ -79,6 +80,7 @@
 				{history}
 				{messageId}
 				{selectedModels}
+				{imageGenerationModel}
 				isLastMessage={messageId === history.currentId}
 				siblings={history.messages[history.messages[messageId].parentId]?.childrenIds ?? []}
 				{setInputText}
@@ -106,6 +108,7 @@
 					{chatId}
 					{messageId}
 					{selectedModels}
+					{imageGenerationModel}
 					isLastMessage={messageId === history?.currentId}
 					{setInputText}
 					{updateChat}

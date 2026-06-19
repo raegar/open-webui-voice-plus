@@ -81,11 +81,15 @@
 	};
 
 	const createAPIKeyHandler = async () => {
-		APIKey = await createAPIKey(localStorage.token);
-		if (APIKey) {
-			toast.success($i18n.t('API Key created.'));
-		} else {
-			toast.error($i18n.t('Failed to create API Key.'));
+		try {
+			APIKey = await createAPIKey(localStorage.token);
+			if (APIKey) {
+				toast.success($i18n.t('API Key created.'));
+			} else {
+				toast.error($i18n.t('Failed to create API Key.'));
+			}
+		} catch (e) {
+			toast.error(typeof e === 'string' ? e : $i18n.t('Failed to create API Key.'));
 		}
 	};
 

@@ -48,6 +48,60 @@ IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 router = APIRouter()
 
 
+def _get_text_content(content) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        return " ".join(
+            part.get("text", "").strip()
+            for part in content
+            if isinstance(part, dict)
+            and part.get("type") == "text"
+            and isinstance(part.get("text"), str)
+        ).strip()
+    return ""
+
+
+def _get_stored_image_prompt(files) -> Optional[str]:
+    if not isinstance(files, list):
+        return None
+    return next(
+        (
+            file.get("prompt").strip()
+            for file in files
+            if isinstance(file, dict)
+            and file.get("type") == "image"
+            and isinstance(file.get("prompt"), str)
+            and file.get("prompt").strip()
+        ),
+        None,
+    )
+
+
+def _resolve_regeneration_prompt(form_data, user) -> tuple[Optional[str], Optional[str]]:
+    if not form_data.chat_id or not form_data.message_id:
+        return None, None
+
+    chat = Chats.get_chat_by_id_and_user_id(form_data.chat_id, user.id)
+    if not chat:
+        return None, None
+
+    message = (
+        chat.chat.get("history", {})
+        .get("messages", {})
+        .get(form_data.message_id, {})
+    )
+    stored_prompt = _get_stored_image_prompt(message.get("files"))
+    if stored_prompt:
+        return stored_prompt, "message"
+
+    assistant_content = _get_text_content(message.get("content"))
+    if assistant_content:
+        return assistant_content, "assistant"
+
+    return None, None
+
+
 def set_image_model(request: Request, model: str):
     log.info(f"Setting image model to {model}")
     request.app.state.config.IMAGE_GENERATION_MODEL = model
@@ -470,6 +524,8 @@ def get_models(request: Request, user=Depends(get_verified_user)):
 class CreateImageForm(BaseModel):
     model: Optional[str] = None
     prompt: str
+    chat_id: Optional[str] = None
+    message_id: Optional[str] = None
     size: Optional[str] = None
     n: int = 1
     steps: Optional[int] = None
@@ -561,6 +617,15 @@ async def generate_images(
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
+    regeneration_prompt, prompt_source = _resolve_regeneration_prompt(form_data, user)
+    if regeneration_prompt:
+        form_data.prompt = regeneration_prompt
+        log.info(
+            "Resolved image regeneration prompt from %s (%d words)",
+            prompt_source,
+            len(regeneration_prompt.split()),
+        )
+
     return await image_generations(request, form_data, user=user)
 
 
@@ -588,7 +653,12 @@ async def image_generations(
 
     metadata = metadata or {}
 
-    model = get_image_model(request)
+    model = form_data.model or get_image_model(request)
+    log.info(
+        "Generating image with model %s (request=%s)",
+        model,
+        form_data.model,
+    )
 
     r = None
     try:
@@ -790,15 +860,18 @@ async def image_generations(
             request.app.state.config.IMAGE_GENERATION_ENGINE == "automatic1111"
             or request.app.state.config.IMAGE_GENERATION_ENGINE == ""
         ):
-            if form_data.model:
-                set_image_model(request, form_data.model)
-
             data = {
                 "prompt": form_data.prompt,
                 "batch_size": form_data.n,
                 "width": width,
                 "height": height,
             }
+
+            if model:
+                data["override_settings"] = {
+                    "sd_model_checkpoint": model,
+                }
+                data["override_settings_restore_afterwards"] = True
 
             if (
                 request.app.state.config.IMAGE_STEPS is not None

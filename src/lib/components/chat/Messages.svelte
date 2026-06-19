@@ -33,6 +33,7 @@
 	export let history = {};
 	export let selectedModels;
 	export let atSelectedModel;
+	export let imageGenerationModel = '';
 
 	let messages = [];
 
@@ -470,6 +471,7 @@
 								{chatId}
 								bind:history
 								{selectedModels}
+								{imageGenerationModel}
 								messageId={message.id}
 								idx={messageIdx}
 								{user}
