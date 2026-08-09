@@ -69,11 +69,38 @@ class Filter:
                 "Useful for old threads that are already over the threshold."
             ),
         )
+        max_context_tokens: int = Field(
+            default=120000,
+            description=(
+                "Approximate token budget for the outgoing request. Condensation also "
+                "triggers when the estimated conversation size exceeds this, and the kept "
+                "window is trimmed from the front until it fits. Set comfortably below your "
+                "model's hard context limit to leave room for the response (e.g. ~120000 "
+                "for a 163840-token model)."
+            ),
+        )
 
     def __init__(self):
         self.valves = self.Valves()
         # chat_id -> (summarised_message_count, summary_text)
         self._cache: dict[str, tuple[int, str]] = {}
+
+    @staticmethod
+    def _message_text(m: dict) -> str:
+        content = m.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(
+                part.get("text", "")
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        return content or ""
+
+    @classmethod
+    def _estimate_tokens(cls, messages: list[dict]) -> int:
+        # Rough heuristic: ~4 chars/token plus a small per-message overhead.
+        # Good enough to keep us safely under a hard context limit.
+        return sum(len(cls._message_text(m)) // 4 + 4 for m in messages)
 
     async def inlet(
         self,
@@ -89,10 +116,21 @@ class Filter:
         keep = self.valves.keep_recent
         trigger = self.valves.trigger_at
 
-        if not self.valves.force_condense and len(conv_msgs) <= trigger:
+        over_count = len(conv_msgs) > trigger
+        over_tokens = (
+            self._estimate_tokens(messages) > self.valves.max_context_tokens
+        )
+
+        if not self.valves.force_condense and not over_count and not over_tokens:
             return body
 
         if keep >= len(conv_msgs):
+            # Nothing old enough to summarise. Still cap the window if we're
+            # over the token budget, otherwise leave the request untouched.
+            if over_tokens:
+                body["messages"] = system_msgs + self._enforce_budget(
+                    system_msgs, conv_msgs, ""
+                )
             return body
 
         to_summarize = conv_msgs[:-keep]
@@ -101,6 +139,7 @@ class Filter:
         chat_id = (__metadata__ or {}).get("chat_id") or "_global"
         cached = self._cache.get(chat_id)
 
+        summary = ""
         if cached:
             cached_count, summary = cached
             gap_size = len(to_summarize) - cached_count
@@ -112,22 +151,45 @@ class Filter:
                     gap_msgs = conv_msgs[cached_count : len(conv_msgs) - keep]
                     to_keep = gap_msgs + to_keep
             else:
-                summary = await self._summarize(to_summarize, body)
-                if summary is None:
-                    return body  # graceful fallback — don't modify on failure
-                self._cache[chat_id] = (len(to_summarize), summary)
+                fresh = await self._summarize(to_summarize, body)
+                if fresh is not None:
+                    summary = fresh
+                    self._cache[chat_id] = (len(to_summarize), fresh)
+                # else: summariser failed — keep the stale cached summary and
+                # still enforce the budget below so the request fits.
         else:
-            summary = await self._summarize(to_summarize, body)
-            if summary is None:
-                return body
-            self._cache[chat_id] = (len(to_summarize), summary)
+            fresh = await self._summarize(to_summarize, body)
+            if fresh is not None:
+                summary = fresh
+                self._cache[chat_id] = (len(to_summarize), fresh)
+            # else: no summary available, but we must NOT bail out — budget
+            # enforcement below still trims the window so the request fits.
 
+        to_keep = self._enforce_budget(system_msgs, to_keep, summary)
         body["messages"] = self._inject_summary(system_msgs, to_keep, summary)
         return body
+
+    def _enforce_budget(
+        self, system_msgs: list[dict], conv_msgs: list[dict], summary: str
+    ) -> list[dict]:
+        # Even after summarising the old tail, the kept window can exceed the
+        # model's hard limit (long roleplay turns). Drop oldest kept messages
+        # until the whole request fits under budget. Better to lose a little
+        # recent verbatim history than to have the endpoint reject the request.
+        budget = self.valves.max_context_tokens
+        overhead = self._estimate_tokens(system_msgs) + len(summary) // 4
+        kept = list(conv_msgs)
+        while len(kept) > 2 and self._estimate_tokens(kept) + overhead > budget:
+            kept = kept[1:]
+        return kept
 
     def _inject_summary(
         self, system_msgs: list[dict], conv_msgs: list[dict], summary: str
     ) -> list[dict]:
+        if not summary.strip():
+            # Summariser unavailable; the window was still trimmed to fit.
+            return system_msgs + conv_msgs
+
         label = self.valves.summary_label
         blurb = f"\n\n{label}\n{summary}"
 
@@ -147,18 +209,35 @@ class Filter:
         lines: list[str] = []
         for m in messages:
             role = m.get("role", "user").capitalize()
-            content = m.get("content", "")
-            if isinstance(content, list):
-                content = " ".join(
-                    part.get("text", "")
-                    for part in content
-                    if isinstance(part, dict) and part.get("type") == "text"
-                )
+            content = self._message_text(m)
             if content:
                 lines.append(f"{role}: {content}")
 
         if not lines:
             return None
+
+        joined = "\n".join(lines)
+
+        # Cap the summariser's own input so THIS call cannot itself overflow the
+        # model's context window. Without this, force-condensing an already-
+        # oversized chat sends the whole old tail in one request and throws the
+        # exact same context-length error we're trying to escape. Keep the most
+        # recent portion of the old history (it bridges to the verbatim window).
+        input_budget = int(
+            (self.valves.max_context_tokens - self.valves.max_summary_tokens)
+            * 4
+            * 0.85
+        )
+        truncated = input_budget > 0 and len(joined) > input_budget
+        if truncated:
+            joined = joined[-input_budget:]
+
+        note = (
+            "(Note: only the most recent portion of the older history is shown; "
+            "summarise what is present.)\n\n"
+            if truncated
+            else ""
+        )
 
         system_prompt = (
             "You are a story archivist for a roleplay session. "
@@ -175,7 +254,7 @@ class Filter:
                 {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
-                    "content": "Summarise this roleplay:\n\n" + "\n".join(lines),
+                    "content": "Summarise this roleplay:\n\n" + note + joined,
                 },
             ],
             "stream": False,
