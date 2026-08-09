@@ -3691,6 +3691,30 @@ YOUCOM_API_KEY = PersistentConfig(
 # Images
 ####################################
 
+ENABLE_VIDEO_GENERATION = PersistentConfig(
+    "ENABLE_VIDEO_GENERATION",
+    "video_generation.enable",
+    os.environ.get("ENABLE_VIDEO_GENERATION", "false").lower() == "true",
+)
+
+COMFYUI_VIDEO_BASE_URL = PersistentConfig(
+    "COMFYUI_VIDEO_BASE_URL",
+    "video_generation.comfyui.base_url",
+    os.getenv("COMFYUI_VIDEO_BASE_URL", "http://host.docker.internal:8188"),
+)
+
+COMFYUI_VIDEO_API_KEY = PersistentConfig(
+    "COMFYUI_VIDEO_API_KEY",
+    "video_generation.comfyui.api_key",
+    os.getenv("COMFYUI_VIDEO_API_KEY", ""),
+)
+
+COMFYUI_VIDEO_TIMEOUT = PersistentConfig(
+    "COMFYUI_VIDEO_TIMEOUT",
+    "video_generation.comfyui.timeout",
+    int(os.getenv("COMFYUI_VIDEO_TIMEOUT", "600")),
+)
+
 ENABLE_IMAGE_GENERATION = PersistentConfig(
     "ENABLE_IMAGE_GENERATION",
     "image_generation.enable",

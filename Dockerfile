@@ -6,7 +6,7 @@ WORKDIR /build
 COPY package.json package-lock.json* ./
 RUN npm install --legacy-peer-deps
 COPY . .
-RUN APP_BUILD_HASH="$(date +%s)" npm run build
+RUN NODE_OPTIONS=--max-old-space-size=4096 APP_BUILD_HASH="$(date +%s)" npm run build
 FROM base
 COPY --from=builder /build/build /app/build
 # Python backend patches (not part of the npm build)
@@ -18,11 +18,24 @@ RUN printf '\n\ndef has_tool_server_access(user, server_connection: dict) -> boo
 COPY --from=builder /build/backend/open_webui/routers/tasks.py /app/backend/open_webui/routers/tasks.py
 COPY --from=builder /build/backend/open_webui/routers/auths.py /app/backend/open_webui/routers/auths.py
 COPY --from=builder /build/backend/open_webui/routers/images.py /app/backend/open_webui/routers/images.py
+COPY --from=builder /build/backend/open_webui/routers/videos.py /app/backend/open_webui/routers/videos.py
+COPY --from=builder /build/backend/open_webui/utils/videos /app/backend/open_webui/utils/videos
 # Patch main.py — add REPLACE_EMDASH_WITH_SEMICOLON import and app.state assignment
 RUN sed -i 's/    RESPONSE_WATERMARK,$/    RESPONSE_WATERMARK,\n    REPLACE_EMDASH_WITH_SEMICOLON,/' /app/backend/open_webui/main.py
 RUN sed -i 's/app\.state\.config\.RESPONSE_WATERMARK = RESPONSE_WATERMARK/app.state.config.RESPONSE_WATERMARK = RESPONSE_WATERMARK\napp.state.config.REPLACE_EMDASH_WITH_SEMICOLON = REPLACE_EMDASH_WITH_SEMICOLON/' /app/backend/open_webui/main.py
 # Patch config.py — add REPLACE_EMDASH_WITH_SEMICOLON persistent config
 RUN sed -i 's/RESPONSE_WATERMARK = PersistentConfig/REPLACE_EMDASH_WITH_SEMICOLON = PersistentConfig(\n    "REPLACE_EMDASH_WITH_SEMICOLON",\n    "ui.replace_emdash_with_semicolon",\n    os.environ.get("REPLACE_EMDASH_WITH_SEMICOLON", "False") == "True",\n)\n\nRESPONSE_WATERMARK = PersistentConfig/' /app/backend/open_webui/config.py
+# MiniMax H3 video generation configuration and API registration.
+# Each patch has an assertion so an incompatible upstream layout fails the build loudly.
+RUN sed -i 's/ENABLE_IMAGE_GENERATION = PersistentConfig/ENABLE_VIDEO_GENERATION = PersistentConfig(\n    "ENABLE_VIDEO_GENERATION",\n    "video_generation.enable",\n    os.environ.get("ENABLE_VIDEO_GENERATION", "false").lower() == "true",\n)\n\nCOMFYUI_VIDEO_BASE_URL = PersistentConfig(\n    "COMFYUI_VIDEO_BASE_URL",\n    "video_generation.comfyui.base_url",\n    os.getenv("COMFYUI_VIDEO_BASE_URL", "http:\/\/host.docker.internal:8188"),\n)\n\nCOMFYUI_VIDEO_API_KEY = PersistentConfig(\n    "COMFYUI_VIDEO_API_KEY",\n    "video_generation.comfyui.api_key",\n    os.getenv("COMFYUI_VIDEO_API_KEY", ""),\n)\n\nCOMFYUI_VIDEO_TIMEOUT = PersistentConfig(\n    "COMFYUI_VIDEO_TIMEOUT",\n    "video_generation.comfyui.timeout",\n    int(os.getenv("COMFYUI_VIDEO_TIMEOUT", "600")),\n)\n\nENABLE_IMAGE_GENERATION = PersistentConfig/' /app/backend/open_webui/config.py \
+    && grep -q 'COMFYUI_VIDEO_TIMEOUT' /app/backend/open_webui/config.py
+RUN sed -i 's/    images,$/    images,\n    videos,/' /app/backend/open_webui/main.py \
+    && sed -i 's/    IMAGE_STEPS,$/    IMAGE_STEPS,\n    ENABLE_VIDEO_GENERATION,\n    COMFYUI_VIDEO_BASE_URL,\n    COMFYUI_VIDEO_API_KEY,\n    COMFYUI_VIDEO_TIMEOUT,/' /app/backend/open_webui/main.py \
+    && sed -i 's/app\.state\.config\.COMFYUI_WORKFLOW_NODES = COMFYUI_WORKFLOW_NODES/app.state.config.COMFYUI_WORKFLOW_NODES = COMFYUI_WORKFLOW_NODES\napp.state.config.ENABLE_VIDEO_GENERATION = ENABLE_VIDEO_GENERATION\napp.state.config.COMFYUI_VIDEO_BASE_URL = COMFYUI_VIDEO_BASE_URL\napp.state.config.COMFYUI_VIDEO_API_KEY = COMFYUI_VIDEO_API_KEY\napp.state.config.COMFYUI_VIDEO_TIMEOUT = COMFYUI_VIDEO_TIMEOUT/' /app/backend/open_webui/main.py \
+    && sed -i "s|app.include_router(images.router, prefix='/api/v1/images', tags=\['images'\])|app.include_router(images.router, prefix='/api/v1/images', tags=['images'])\napp.include_router(videos.router, prefix='/api/v1/videos', tags=['videos'])|" /app/backend/open_webui/main.py \
+    && sed -i "s/'enable_image_generation': app\.state\.config\.ENABLE_IMAGE_GENERATION,/'enable_image_generation': app.state.config.ENABLE_IMAGE_GENERATION,\n                    'enable_video_generation': app.state.config.ENABLE_VIDEO_GENERATION,/" /app/backend/open_webui/main.py \
+    && grep -q 'include_router(videos.router' /app/backend/open_webui/main.py \
+    && grep -q "'enable_video_generation'" /app/backend/open_webui/main.py
 # Scheduled jobs feature (local files — not from fork, no GitHub push needed)
 COPY backend/open_webui/models/scheduled_jobs.py /app/backend/open_webui/models/scheduled_jobs.py
 COPY backend/open_webui/routers/scheduled_jobs.py /app/backend/open_webui/routers/scheduled_jobs.py

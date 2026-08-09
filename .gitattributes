@@ -46,4 +46,6 @@
 
 # Misc
 *.env text eol=lf
-*.lock text eol=lf
+*.lock text eol=lfDockerfile text eol=lf
+.dockerignore text eol=lf
+.env.example text eol=lf

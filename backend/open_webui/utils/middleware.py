@@ -51,6 +51,7 @@ from open_webui.routers.images import (
     image_edits,
     EditImageForm,
 )
+from open_webui.routers.videos import video_generations, CreateVideoForm
 from open_webui.routers.pipelines import (
     process_pipeline_inlet_filter,
     process_pipeline_outlet_filter,
@@ -1722,6 +1723,129 @@ async def chat_image_generation_handler(
     return form_data
 
 
+
+async def chat_video_generation_handler(
+    request: Request, form_data: dict, extra_params: dict, user
+):
+    metadata = extra_params.get("__metadata__", {})
+    chat_id = metadata.get("chat_id")
+    event_emitter = extra_params.get("__event_emitter__")
+
+    if not chat_id or not isinstance(chat_id, str) or not event_emitter:
+        return form_data
+
+    chat = Chats.get_chat_by_id_and_user_id(chat_id, user.id)
+    if not chat:
+        return form_data
+
+    await event_emitter(
+        {
+            "type": "status",
+            "data": {"description": "Creating video", "done": False},
+        }
+    )
+
+    messages_map = chat.chat.get("history", {}).get("messages", {})
+    message_id = chat.chat.get("history", {}).get("currentId")
+    message_list = get_message_list(messages_map, message_id)
+    prompt = get_last_user_message(message_list)
+
+    if request.app.state.config.ENABLE_IMAGE_PROMPT_GENERATION:
+        try:
+            res = await generate_image_prompt(
+                request,
+                {
+                    "model": form_data["model"],
+                    "messages": form_data["messages"],
+                    "chat_id": chat_id,
+                },
+                user,
+            )
+            response = res["choices"][0]["message"]["content"]
+            bracket_start = response.find("{")
+            bracket_end = response.rfind("}") + 1
+            if bracket_start >= 0 and bracket_end > bracket_start:
+                prompt = json.loads(response[bracket_start:bracket_end]).get(
+                    "prompt", prompt
+                )
+        except Exception:
+            log.exception("Failed to enhance the MiniMax H3 prompt")
+
+    features = metadata.get("features", {})
+    options = features.get("video_generation_options", {})
+    mode = options.get("mode", "text")
+    source_image_url = None
+    if mode == "image":
+        message_images = get_images_from_messages(message_list)
+        if message_images and message_images[0]:
+            source_image_url = message_images[0][0]
+
+    try:
+        videos = await video_generations(
+            request=request,
+            form_data=CreateVideoForm(
+                prompt=prompt,
+                mode=mode,
+                aspect_ratio=options.get("aspect_ratio", "16:9"),
+                megapixels=options.get("megapixels", 0.2),
+                duration=options.get("duration", 3),
+                source_image_url=source_image_url,
+            ),
+            metadata={
+                "chat_id": chat_id,
+                "message_id": metadata.get("message_id"),
+            },
+            user=user,
+        )
+
+        await event_emitter(
+            {
+                "type": "status",
+                "data": {"description": "Video created", "done": True},
+            }
+        )
+        await event_emitter(
+            {
+                "type": "files",
+                "data": {
+                    "files": [
+                        {
+                            "type": "video",
+                            "url": video["url"],
+                            "content_type": video["content_type"],
+                            "prompt": prompt,
+                            "mode": video["mode"],
+                            "aspect_ratio": video["aspect_ratio"],
+                            "megapixels": video["megapixels"],
+                            "duration": video["duration"],
+                            "seed": video["seed"],
+                            **(
+                                {"source_image_url": source_image_url}
+                                if source_image_url
+                                else {}
+                            ),
+                        }
+                        for video in videos
+                    ]
+                },
+            }
+        )
+    except Exception as exc:
+        log.exception("MiniMax H3 video generation failed")
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        await event_emitter(
+            {
+                "type": "status",
+                "data": {
+                    "description": f"Video generation failed: {detail}",
+                    "done": True,
+                    "error": True,
+                },
+            }
+        )
+
+    return form_data
+
 async def chat_completion_files_handler(
     request: Request, body: dict, extra_params: dict, user: UserModel
 ) -> tuple[dict, dict[str, list]]:
@@ -2918,16 +3042,29 @@ async def background_tasks_handler(ctx):
                     "__metadata__": metadata,
                     "__event_emitter__": event_emitter,
                 }
-                image_form_data = {
-                    **form_data,
-                    "messages": messages,
-                }
+                image_form_data = {**form_data, "messages": messages}
                 await chat_image_generation_handler(
                     request, image_form_data, extra_params, user
                 )
-            except Exception as e:
-                log.exception(e)
-    
+            except Exception:
+                log.exception("Deferred image generation failed")
+
+        if (
+            metadata.get("features", {}).get("video_generation")
+            and not metadata.get("chat_id", "").startswith("local:")
+            and metadata.get("params", {}).get("function_calling") != "native"
+        ):
+            try:
+                extra_params = {
+                    "__metadata__": metadata,
+                    "__event_emitter__": event_emitter,
+                }
+                video_form_data = {**form_data, "messages": messages}
+                await chat_video_generation_handler(
+                    request, video_form_data, extra_params, user
+                )
+            except Exception:
+                log.exception("Deferred video generation failed")
 
 
 async def non_streaming_chat_response_handler(response, ctx):
@@ -3044,13 +3181,25 @@ async def non_streaming_chat_response_handler(response, ctx):
                                 },
                             )
 
-                    # Emit Requesting image before background tasks so it
-                    # appears after the completion event clears the status
+                    # Emit generation status after completion clears the status display.
                     if metadata.get("features", {}).get("image_generation"):
                         await event_emitter(
                             {
                                 "type": "status",
-                                "data": {"description": "Requesting image", "done": False},
+                                "data": {
+                                    "description": "Requesting image",
+                                    "done": False,
+                                },
+                            }
+                        )
+                    if metadata.get("features", {}).get("video_generation"):
+                        await event_emitter(
+                            {
+                                "type": "status",
+                                "data": {
+                                    "description": "Requesting video",
+                                    "done": False,
+                                },
                             }
                         )
                     await background_tasks_handler(ctx)
@@ -4563,16 +4712,27 @@ async def streaming_chat_response_handler(response, ctx):
                     }
                 )
 
-                # Emit Requesting image before background tasks so it appears
-                # after the completion event clears the status display
+                # Emit generation status after completion clears the status display.
                 if metadata.get("features", {}).get("image_generation"):
                     await event_emitter(
                         {
                             "type": "status",
-                            "data": {"description": "Requesting image", "done": False},
+                            "data": {
+                                "description": "Requesting image",
+                                "done": False,
+                            },
                         }
                     )
-
+                if metadata.get("features", {}).get("video_generation"):
+                    await event_emitter(
+                        {
+                            "type": "status",
+                            "data": {
+                                "description": "Requesting video",
+                                "done": False,
+                            },
+                        }
+                    )
                 await background_tasks_handler(ctx)
             except asyncio.CancelledError:
                 log.warning("Task was cancelled!")

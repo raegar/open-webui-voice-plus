@@ -150,6 +150,11 @@
 
 	let imageGenerationEnabled = false;
 	let imageGenerationModel = '';
+	let videoGenerationEnabled = false;
+	let videoGenerationMode: 'text' | 'image' = 'text';
+	let videoGenerationAspectRatio: '16:9' | '9:16' | '1:1' = '16:9';
+	let videoGenerationMegapixels: 0.2 | 0.4 = 0.2;
+	let videoGenerationDuration: 3 | 5 = 3;
 	let webSearchEnabled = false;
 	let codeInterpreterEnabled = false;
 
@@ -200,6 +205,11 @@
 		webSearchEnabled = false;
 		imageGenerationEnabled = false;
 		imageGenerationModel = '';
+		videoGenerationEnabled = false;
+		videoGenerationMode = 'text';
+		videoGenerationAspectRatio = '16:9';
+		videoGenerationMegapixels = 0.2;
+		videoGenerationDuration = 3;
 
 		const storageChatInput = sessionStorage.getItem(
 			`chat-input${chatIdProp ? `-${chatIdProp}` : ''}`
@@ -248,6 +258,11 @@
 						webSearchEnabled = input.webSearchEnabled;
 						imageGenerationEnabled = input.imageGenerationEnabled;
 						imageGenerationModel = input.imageGenerationModel ?? '';
+						videoGenerationEnabled = input.videoGenerationEnabled ?? false;
+						videoGenerationMode = input.videoGenerationMode ?? 'text';
+						videoGenerationAspectRatio = input.videoGenerationAspectRatio ?? '16:9';
+						videoGenerationMegapixels = input.videoGenerationMegapixels ?? 0.2;
+						videoGenerationDuration = input.videoGenerationDuration ?? 3;
 						codeInterpreterEnabled = input.codeInterpreterEnabled;
 					}
 				} catch (e) {}
@@ -309,6 +324,11 @@
 		webSearchEnabled = false;
 		imageGenerationEnabled = false;
 		imageGenerationModel = '';
+		videoGenerationEnabled = false;
+		videoGenerationMode = 'text';
+		videoGenerationAspectRatio = '16:9';
+		videoGenerationMegapixels = 0.2;
+		videoGenerationDuration = 3;
 		codeInterpreterEnabled = false;
 
 		if (selectedModelIds.filter((id) => id).length > 0) {
@@ -344,9 +364,9 @@
 
 			// Set Default Filters (Toggleable only)
 			{
-				const modelDefaultFilters = ((model?.info?.meta?.defaultFilterIds ?? []) as string[]).filter((id) =>
-					model?.filters?.find((f: { id: string }) => f.id === id)
-				);
+				const modelDefaultFilters = (
+					(model?.info?.meta?.defaultFilterIds ?? []) as string[]
+				).filter((id) => model?.filters?.find((f: { id: string }) => f.id === id));
 				selectedFilterIds = [...new Set([...modelDefaultFilters, ...defaultMemoryFilterIds()])];
 			}
 
@@ -739,6 +759,11 @@
 				imageGenerationEnabled = false;
 				imageGenerationModel = '';
 				codeInterpreterEnabled = false;
+				videoGenerationEnabled = false;
+				videoGenerationMode = 'text';
+				videoGenerationAspectRatio = '16:9';
+				videoGenerationMegapixels = 0.2;
+				videoGenerationDuration = 3;
 
 				try {
 					const input = JSON.parse(storageChatInput);
@@ -752,6 +777,11 @@
 						imageGenerationEnabled = input.imageGenerationEnabled;
 						imageGenerationModel = input.imageGenerationModel ?? '';
 						codeInterpreterEnabled = input.codeInterpreterEnabled;
+						videoGenerationEnabled = input.videoGenerationEnabled ?? false;
+						videoGenerationMode = input.videoGenerationMode ?? 'text';
+						videoGenerationAspectRatio = input.videoGenerationAspectRatio ?? '16:9';
+						videoGenerationMegapixels = input.videoGenerationMegapixels ?? 0.2;
+						videoGenerationDuration = input.videoGenerationDuration ?? 3;
 					}
 				} catch (e) {}
 			}
@@ -1766,6 +1796,16 @@
 			toast.error($i18n.t('Model not selected'));
 			return;
 		}
+		if (
+			videoGenerationEnabled &&
+			videoGenerationMode === 'image' &&
+			!files.some(
+				(file) => file.type === 'image' || (file?.content_type ?? '').startsWith('image/')
+			)
+		) {
+			toast.error($i18n.t('Image-to-video requires an attached image'));
+			return;
+		}
 
 		if (
 			files.length > 0 &&
@@ -1969,7 +2009,8 @@
 					if (
 						hasImages &&
 						!(model.info?.meta?.capabilities?.vision ?? true) &&
-						!imageGenerationEnabled
+						!imageGenerationEnabled &&
+						!videoGenerationEnabled
 					) {
 						toast.error(
 							$i18n.t('Model {{modelName}} is not vision capable', {
@@ -2016,6 +2057,17 @@
 						? imageGenerationEnabled
 						: false,
 				image_generation_model: imageGenerationModel || undefined,
+				video_generation:
+					$config?.features?.enable_video_generation &&
+					($user?.role === 'admin' || $user?.permissions?.features?.image_generation)
+						? videoGenerationEnabled
+						: false,
+				video_generation_options: {
+					mode: videoGenerationMode,
+					aspect_ratio: videoGenerationAspectRatio,
+					megapixels: videoGenerationMegapixels,
+					duration: videoGenerationDuration
+				},
 				code_interpreter:
 					$config?.features?.enable_code_interpreter &&
 					($user?.role === 'admin' || $user?.permissions?.features?.code_interpreter)
@@ -2130,8 +2182,7 @@
 				const includeImages = supportsVision || message.id === userMessage?.id;
 				const imageFiles = includeImages
 					? (message?.files ?? []).filter(
-							(file) =>
-								file.type === 'image' || (file?.content_type ?? '').startsWith('image/')
+							(file) => file.type === 'image' || (file?.content_type ?? '').startsWith('image/')
 						)
 					: [];
 
@@ -2849,6 +2900,11 @@
 									bind:webSearchEnabled
 									bind:atSelectedModel
 									bind:showCommands
+									bind:videoGenerationEnabled
+									bind:videoGenerationMode
+									bind:videoGenerationAspectRatio
+									bind:videoGenerationMegapixels
+									bind:videoGenerationDuration
 									bind:dragged
 									toolServers={$toolServers}
 									{generating}
@@ -2921,6 +2977,11 @@
 									bind:webSearchEnabled
 									bind:atSelectedModel
 									bind:showCommands
+									bind:videoGenerationEnabled
+									bind:videoGenerationMode
+									bind:videoGenerationAspectRatio
+									bind:videoGenerationMegapixels
+									bind:videoGenerationDuration
 									bind:dragged
 									toolServers={$toolServers}
 									{stopResponse}

@@ -921,6 +921,39 @@ export const processDetails = (content) => {
 // This regular expression matches code blocks marked by triple backticks
 const codeBlockRegex = /```[\s\S]*?```/g;
 
+export const removeMarkdownCodeBlocks = (content: string) => {
+	const lines = content.replace(/\r\n?/g, '\n').split('\n');
+	const textLines: string[] = [];
+	let fence: { marker: string; length: number } | null = null;
+
+	for (const line of lines) {
+		if (fence) {
+			const closingFence = line.match(/^[ \t]{0,3}(`+|~+)[ \t]*$/);
+			if (
+				closingFence &&
+				closingFence[1][0] === fence.marker &&
+				closingFence[1].length >= fence.length
+			) {
+				fence = null;
+			}
+			continue;
+		}
+
+		const openingFence = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+		if (openingFence) {
+			fence = {
+				marker: openingFence[1][0],
+				length: openingFence[1].length
+			};
+			continue;
+		}
+
+		textLines.push(line);
+	}
+
+	return textLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+};
+
 export const extractSentences = (text: string) => {
 	const codeBlocks: string[] = [];
 	let index = 0;
@@ -996,6 +1029,7 @@ export const getMessageContentParts = (content: string, splitOn: string = 'punct
 	// leaking thinking content into TTS. Applying the strip here on
 	// the full string catches those cases. (Fixes #22197)
 	content = content.replace(/<details[^>]*>[\s\S]*?<\/details>/gi, '');
+	content = removeMarkdownCodeBlocks(content);
 
 	const messageContentParts: string[] = [];
 

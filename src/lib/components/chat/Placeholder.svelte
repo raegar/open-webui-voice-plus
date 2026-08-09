@@ -52,6 +52,11 @@
 
 	export let imageGenerationEnabled = false;
 	export let imageGenerationModel = '';
+	export let videoGenerationEnabled = false;
+	export let videoGenerationMode: 'text' | 'image' = 'text';
+	export let videoGenerationAspectRatio: '16:9' | '9:16' | '1:1' = '16:9';
+	export let videoGenerationMegapixels: 0.2 | 0.4 = 0.2;
+	export let videoGenerationDuration: 3 | 5 = 3;
 	export let codeInterpreterEnabled = false;
 	export let webSearchEnabled = false;
 
@@ -212,6 +217,11 @@
 					bind:selectedFilterIds
 					bind:imageGenerationEnabled
 					bind:imageGenerationModel
+					bind:videoGenerationEnabled
+					bind:videoGenerationMode
+					bind:videoGenerationAspectRatio
+					bind:videoGenerationMegapixels
+					bind:videoGenerationDuration
 					bind:codeInterpreterEnabled
 					bind:webSearchEnabled
 					bind:atSelectedModel

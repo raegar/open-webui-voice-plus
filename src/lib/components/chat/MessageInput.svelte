@@ -78,6 +78,7 @@
 	import XMark from '../icons/XMark.svelte';
 	import GlobeAlt from '../icons/GlobeAlt.svelte';
 	import Photo from '../icons/Photo.svelte';
+	import VideoCamera from '../icons/VideoCamera.svelte';
 	import Wrench from '../icons/Wrench.svelte';
 	import Sparkles from '../icons/Sparkles.svelte';
 
@@ -131,6 +132,14 @@
 
 	export let imageGenerationEnabled = false;
 	export let imageGenerationModel = '';
+	export let videoGenerationEnabled = false;
+	export let videoGenerationMode: 'text' | 'image' = 'text';
+	export let videoGenerationAspectRatio: '16:9' | '9:16' | '1:1' = '16:9';
+	export let videoGenerationMegapixels: 0.2 | 0.4 = 0.2;
+	export let videoGenerationDuration: 3 | 5 = 3;
+
+	$: if (videoGenerationEnabled && imageGenerationEnabled) imageGenerationEnabled = false;
+
 	export let webSearchEnabled = false;
 	export let codeInterpreterEnabled = false;
 
@@ -187,6 +196,11 @@
 		imageGenerationEnabled,
 		imageGenerationModel,
 		webSearchEnabled,
+		videoGenerationEnabled,
+		videoGenerationMode,
+		videoGenerationAspectRatio,
+		videoGenerationMegapixels,
+		videoGenerationDuration,
 		codeInterpreterEnabled
 	});
 
@@ -494,6 +508,14 @@
 	);
 
 	let codeInterpreterCapableModels = [];
+	let videoGenerationCapableModels = [];
+	$: videoGenerationCapableModels = (
+		atSelectedModel?.id ? [atSelectedModel.id] : selectedModels
+	).filter(
+		(model) =>
+			$models.find((m) => m.id === model)?.info?.meta?.capabilities?.video_generation ?? true
+	);
+
 	$: codeInterpreterCapableModels = (
 		atSelectedModel?.id ? [atSelectedModel.id] : selectedModels
 	).filter(
@@ -521,6 +543,13 @@
 		(atSelectedModel?.id ? [atSelectedModel.id] : selectedModels).length ===
 			imageGenerationCapableModels.length &&
 		$config?.features?.enable_image_generation &&
+		($_user.role === 'admin' || $_user?.permissions?.features?.image_generation);
+
+	let showVideoGenerationButton = false;
+	$: showVideoGenerationButton =
+		(atSelectedModel?.id ? [atSelectedModel.id] : selectedModels).length ===
+			videoGenerationCapableModels.length &&
+		$config?.features?.enable_video_generation &&
 		($_user.role === 'admin' || $_user?.permissions?.features?.image_generation);
 
 	let showCodeInterpreterButton = false;
@@ -1600,7 +1629,7 @@
 										</div>
 									</InputMenu>
 
-									{#if showWebSearchButton || showImageGenerationButton || showCodeInterpreterButton || showToolsButton || (toggleFilters && toggleFilters.length > 0)}
+									{#if showWebSearchButton || showImageGenerationButton || showVideoGenerationButton || showCodeInterpreterButton || showToolsButton || (toggleFilters && toggleFilters.length > 0)}
 										<div
 											class="flex self-center w-[1px] h-4 mx-1 bg-gray-200/50 dark:bg-gray-800/50"
 										/>
@@ -1610,11 +1639,13 @@
 											{toggleFilters}
 											{showWebSearchButton}
 											{showImageGenerationButton}
+											{showVideoGenerationButton}
 											{showCodeInterpreterButton}
 											bind:selectedToolIds
 											bind:selectedFilterIds
 											bind:webSearchEnabled
 											bind:imageGenerationEnabled
+											bind:videoGenerationEnabled
 											bind:codeInterpreterEnabled
 											closeOnOutsideClick={integrationsMenuCloseOnOutsideClick}
 											onShowValves={(e) => {
@@ -1740,35 +1771,80 @@
 
 										{#if imageGenerationEnabled}
 											<div class="flex items-center gap-1">
-											<Tooltip content={$i18n.t('Image')} placement="top">
-												<button
-													on:click|preventDefault={() =>
-														(imageGenerationEnabled = !imageGenerationEnabled)}
-													type="button"
-													class="group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {imageGenerationEnabled
-														? ' text-sky-500 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-400/10 dark:hover:bg-sky-700/10 border border-sky-200/40 dark:border-sky-500/20'
-														: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '}"
-												>
-													<Photo className="size-4" strokeWidth="1.75" />
-													<div class="hidden group-hover:block">
-														<XMark className="size-4" strokeWidth="1.75" />
-													</div>
-												</button>
-											</Tooltip>
+												<Tooltip content={$i18n.t('Image')} placement="top">
+													<button
+														on:click|preventDefault={() =>
+															(imageGenerationEnabled = !imageGenerationEnabled)}
+														type="button"
+														class="group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {imageGenerationEnabled
+															? ' text-sky-500 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-400/10 dark:hover:bg-sky-700/10 border border-sky-200/40 dark:border-sky-500/20'
+															: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '}"
+													>
+														<Photo className="size-4" strokeWidth="1.75" />
+														<div class="hidden group-hover:block">
+															<XMark className="size-4" strokeWidth="1.75" />
+														</div>
+													</button>
+												</Tooltip>
 
-											{#if imageGenerationModels.length > 1}
+												{#if imageGenerationModels.length > 1}
+													<select
+														bind:value={imageGenerationModel}
+														on:input={updateImageGenerationModel}
+														on:change={updateImageGenerationModel}
+														class="text-xs rounded-full px-2 py-1 border border-sky-200/40 dark:border-sky-500/20 bg-sky-50 dark:bg-sky-400/10 text-sky-500 dark:text-sky-300 focus:outline-none max-w-[5rem] sm:max-w-none"
+													>
+														<option value="">Default</option>
+														{#each imageGenerationModels as m}
+															<option value={m.id}>{m.name || m.id}</option>
+														{/each}
+													</select>
+												{/if}
+											</div>
+										{/if}
+
+										{#if videoGenerationEnabled}
+											<div class="flex items-center gap-1 flex-wrap">
+												<Tooltip content={$i18n.t('Video')} placement="top">
+													<button
+														on:click|preventDefault={() => (videoGenerationEnabled = false)}
+														type="button"
+														class="group p-[7px] flex gap-1.5 items-center text-sm rounded-full text-violet-500 dark:text-violet-300 bg-violet-50 hover:bg-violet-100 dark:bg-violet-400/10 dark:hover:bg-violet-700/10 border border-violet-200/40 dark:border-violet-500/20"
+													>
+														<VideoCamera className="size-4" strokeWidth="1.75" />
+														<div class="hidden group-hover:block"><XMark className="size-4" /></div>
+													</button>
+												</Tooltip>
 												<select
-													bind:value={imageGenerationModel}
-													on:input={updateImageGenerationModel}
-													on:change={updateImageGenerationModel}
-													class="text-xs rounded-full px-2 py-1 border border-sky-200/40 dark:border-sky-500/20 bg-sky-50 dark:bg-sky-400/10 text-sky-500 dark:text-sky-300 focus:outline-none max-w-[5rem] sm:max-w-none"
+													bind:value={videoGenerationMode}
+													aria-label={$i18n.t('Video mode')}
+													class="text-xs rounded-full px-2 py-1 border border-violet-200/40 dark:border-violet-500/20 bg-violet-50 dark:bg-violet-400/10 text-violet-600 dark:text-violet-300 focus:outline-none"
 												>
-													<option value="">Default</option>
-													{#each imageGenerationModels as m}
-														<option value={m.id}>{m.name || m.id}</option>
-													{/each}
+													<option value="text">Text</option>
+													<option value="image">Image</option>
 												</select>
-											{/if}
+												<select
+													bind:value={videoGenerationAspectRatio}
+													aria-label={$i18n.t('Aspect ratio')}
+													class="text-xs rounded-full px-2 py-1 border border-violet-200/40 dark:border-violet-500/20 bg-violet-50 dark:bg-violet-400/10 text-violet-600 dark:text-violet-300 focus:outline-none"
+												>
+													<option value="16:9">16:9</option><option value="9:16">9:16</option
+													><option value="1:1">1:1</option>
+												</select>
+												<select
+													bind:value={videoGenerationMegapixels}
+													aria-label={$i18n.t('Video resolution')}
+													class="text-xs rounded-full px-2 py-1 border border-violet-200/40 dark:border-violet-500/20 bg-violet-50 dark:bg-violet-400/10 text-violet-600 dark:text-violet-300 focus:outline-none"
+												>
+													<option value={0.2}>0.2 MP</option><option value={0.4}>0.4 MP</option>
+												</select>
+												<select
+													bind:value={videoGenerationDuration}
+													aria-label={$i18n.t('Video duration')}
+													class="text-xs rounded-full px-2 py-1 border border-violet-200/40 dark:border-violet-500/20 bg-violet-50 dark:bg-violet-400/10 text-violet-600 dark:text-violet-300 focus:outline-none"
+												>
+													<option value={3}>3s</option><option value={5}>5s</option>
+												</select>
 											</div>
 										{/if}
 

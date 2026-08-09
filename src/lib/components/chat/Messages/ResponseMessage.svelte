@@ -26,6 +26,7 @@
 	} from '$lib/stores';
 	import { synthesizeOpenAISpeech } from '$lib/apis/audio';
 	import { imageGenerations } from '$lib/apis/images';
+	import { videoGenerations } from '$lib/apis/videos';
 	import {
 		copyToClipboard as _copyToClipboard,
 		approximateToHumanReadable,
@@ -34,7 +35,8 @@
 		createMessagesList,
 		formatDate,
 		removeDetails,
-		removeAllDetails
+		removeAllDetails,
+		removeMarkdownCodeBlocks
 	} from '$lib/utils';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 
@@ -77,6 +79,12 @@
 			content_type?: string;
 			name?: string;
 			size?: number;
+			mode?: 'text' | 'image';
+			aspect_ratio?: '16:9' | '9:16' | '1:1';
+			megapixels?: 0.2 | 0.4;
+			duration?: 3 | 5;
+			seed?: number;
+			source_image_url?: string;
 		}[];
 		timestamp: number;
 		role: string;
@@ -241,6 +249,61 @@
 		}
 	};
 
+	let regeneratingVideo = false;
+
+	const regenerateVideo = async () => {
+		const storedVideo = (message.files ?? []).find((file) => file.type === 'video');
+		if (!storedVideo) return;
+
+		const fallbackPrompt = Array.isArray(message.content)
+			? message.content
+					.filter((part: any) => part.type === 'text')
+					.map((part: any) => part.text)
+					.join(' ')
+			: message.content;
+		const prompt = storedVideo.prompt ?? fallbackPrompt ?? '';
+		if (!prompt) return;
+
+		regeneratingVideo = true;
+		try {
+			const videos = await videoGenerations(
+				localStorage.token,
+				prompt,
+				{
+					mode: storedVideo.mode ?? 'text',
+					aspect_ratio: storedVideo.aspect_ratio ?? '16:9',
+					megapixels: storedVideo.megapixels ?? 0.2,
+					duration: storedVideo.duration ?? 3,
+					...(storedVideo.source_image_url
+						? { source_image_url: storedVideo.source_image_url }
+						: {})
+				},
+				chatId,
+				messageId
+			);
+			if (videos) {
+				const newFiles = [
+					...(message.files ?? []).filter((file) => file.type !== 'video'),
+					...videos.map((video: any) => ({
+						type: 'video',
+						...video,
+						prompt,
+						...(storedVideo.source_image_url
+							? { source_image_url: storedVideo.source_image_url }
+							: {})
+					}))
+				];
+				await saveMessage(messageId, {
+					...history.messages[messageId],
+					files: newFiles
+				});
+			}
+		} catch (error) {
+			toast.error(typeof error === 'string' ? error : $i18n.t('Failed to regenerate video'));
+		} finally {
+			regeneratingVideo = false;
+		}
+	};
 	const copyToClipboard = async (text) => {
 		text = removeAllDetails(text);
 
@@ -267,13 +330,14 @@
 	};
 
 	const speak = async () => {
-		if (!(message?.content ?? '').trim().length) {
+		const content = removeMarkdownCodeBlocks(removeAllDetails(message?.content ?? ''));
+
+		if (!content.length) {
 			toast.info($i18n.t('No content to speak'));
 			return;
 		}
 
 		speaking = true;
-		const content = removeAllDetails(message.content);
 
 		// Get voice: model-specific > user settings > config default
 		const getVoiceId = () => {
@@ -719,7 +783,6 @@
 			<div>
 				<div class="chat-{message.role} w-full min-w-full markdown-prose">
 					<div>
-
 						{#if message?.embeds && message.embeds.length > 0}
 							<div
 								class="my-1 w-full flex overflow-x-auto gap-2 flex-wrap"
@@ -878,27 +941,45 @@
 							{#if model?.info?.meta?.capabilities?.status_updates ?? true}
 								<StatusHistory statusHistory={message?.statusHistory} />
 							{/if}
-							{#if message?.files && message.files?.filter((f) => f.type === 'image').length > 0}
+							{#if message?.files && message.files.some((file) => file.type === 'image' || file.type === 'video' || (file?.content_type ?? '').startsWith('image/') || (file?.content_type ?? '').startsWith('video/'))}
 								<div
-										class="my-1 w-full flex overflow-x-auto gap-2 flex-wrap"
-										dir={$settings?.chatDirection ?? 'auto'}
+									class="my-1 w-full flex overflow-x-auto gap-2 flex-wrap"
+									dir={$settings?.chatDirection ?? 'auto'}
 								>
-										{#each message.files as file}
-												<div>
-														{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
-																<Image src={file.url} alt={message.content} />
-														{:else}
-																<FileItem
-																		item={file}
-																		url={file.url}
-																		name={file.name}
-																		type={file.type}
-																		size={file?.size}
-																		small={true}
-																/>
-														{/if}
+									{#each message.files as file}
+										<div>
+											{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
+												<Image src={file.url} alt={message.content} />
+											{:else if file.type === 'video' || (file?.content_type ?? '').startsWith('video/')}
+												<div class="flex flex-col gap-1">
+													<!-- svelte-ignore a11y_media_has_caption -->
+													<video
+														src={file.url}
+														controls
+														playsinline
+														preload="metadata"
+														class="max-w-full max-h-[32rem] rounded-xl bg-black"
+													></video>
+													<a
+														href={file.url}
+														download
+														class="text-xs text-gray-500 hover:underline w-fit"
+													>
+														{$i18n.t('Download video')}
+													</a>
 												</div>
-										{/each}
+											{:else}
+												<FileItem
+													item={file}
+													url={file.url}
+													name={file.name}
+													type={file.type}
+													size={file?.size}
+													small={true}
+												/>
+											{/if}
+										</div>
+									{/each}
 								</div>
 							{/if}
 						</div>
@@ -1447,6 +1528,23 @@
 									{/if}
 
 									{#if $user?.role === 'admin' || ($user?.permissions?.chat?.delete_message ?? true)}
+										{#if message.done && !readOnly && (message.files ?? []).some((file) => file.type === 'video')}
+											<Tooltip content={$i18n.t('Regenerate Video')} placement="bottom">
+												<button
+													type="button"
+													aria-label={$i18n.t('Regenerate Video')}
+													class="p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition disabled:opacity-50"
+													on:click={regenerateVideo}
+													disabled={regeneratingVideo}
+												>
+													{#if regeneratingVideo}
+														<Spinner className="size-4" />
+													{:else}
+														<PhotoRefresh className="size-4" strokeWidth="2.3" />
+													{/if}
+												</button>
+											</Tooltip>
+										{/if}
 										{#if siblings.length > 1}
 											<Tooltip content={$i18n.t('Delete')} placement="bottom">
 												<button

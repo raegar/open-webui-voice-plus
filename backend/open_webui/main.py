@@ -72,6 +72,7 @@ from open_webui.routers import (
     analytics,
     audio,
     images,
+    videos,
     ollama,
     openai,
     retrieval,
@@ -166,6 +167,10 @@ from open_webui.config import (
     IMAGE_GENERATION_MODEL,
     IMAGE_SIZE,
     IMAGE_STEPS,
+    ENABLE_VIDEO_GENERATION,
+    COMFYUI_VIDEO_BASE_URL,
+    COMFYUI_VIDEO_API_KEY,
+    COMFYUI_VIDEO_TIMEOUT,
     IMAGES_OPENAI_API_BASE_URL,
     IMAGES_OPENAI_API_VERSION,
     IMAGES_OPENAI_API_KEY,
@@ -1236,6 +1241,11 @@ app.state.config.COMFYUI_WORKFLOW = COMFYUI_WORKFLOW
 app.state.config.COMFYUI_WORKFLOW_NODES = COMFYUI_WORKFLOW_NODES
 
 
+app.state.config.ENABLE_VIDEO_GENERATION = ENABLE_VIDEO_GENERATION
+app.state.config.COMFYUI_VIDEO_BASE_URL = COMFYUI_VIDEO_BASE_URL
+app.state.config.COMFYUI_VIDEO_API_KEY = COMFYUI_VIDEO_API_KEY
+app.state.config.COMFYUI_VIDEO_TIMEOUT = COMFYUI_VIDEO_TIMEOUT
+
 app.state.config.ENABLE_IMAGE_EDIT = ENABLE_IMAGE_EDIT
 app.state.config.IMAGE_EDIT_ENGINE = IMAGE_EDIT_ENGINE
 app.state.config.IMAGE_EDIT_MODEL = IMAGE_EDIT_MODEL
@@ -1535,6 +1545,7 @@ app.include_router(tasks.router, prefix="/api/v1/tasks", tags=["tasks"])
 app.include_router(images.router, prefix="/api/v1/images", tags=["images"])
 
 app.include_router(audio.router, prefix="/api/v1/audio", tags=["audio"])
+app.include_router(videos.router, prefix="/api/v1/videos", tags=["videos"])
 app.include_router(retrieval.router, prefix="/api/v1/retrieval", tags=["retrieval"])
 
 app.include_router(configs.router, prefix="/api/v1/configs", tags=["configs"])
@@ -2165,6 +2176,7 @@ async def get_app_config(request: Request):
                     "enable_image_generation": app.state.config.ENABLE_IMAGE_GENERATION,
                     "enable_autocomplete_generation": app.state.config.ENABLE_AUTOCOMPLETE_GENERATION,
                     "enable_community_sharing": app.state.config.ENABLE_COMMUNITY_SHARING,
+                    "enable_video_generation": app.state.config.ENABLE_VIDEO_GENERATION,
                     "enable_message_rating": app.state.config.ENABLE_MESSAGE_RATING,
                     "enable_user_webhooks": app.state.config.ENABLE_USER_WEBHOOKS,
                     "enable_user_status": app.state.config.ENABLE_USER_STATUS,
