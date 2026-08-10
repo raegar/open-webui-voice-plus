@@ -71,6 +71,9 @@ Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep
 	let elapsedSeconds = 0;
 	let currentVideo: GeneratedVideo | null = null;
 	let videoHistory: GeneratedVideo[] = [];
+	let continuationSource: GeneratedVideo | null = null;
+	let capturingFrame = false;
+	let scrollContainer: HTMLDivElement;
 	let firstFileInput: HTMLInputElement;
 	let historyLoading = false;
 	let lastFileInput: HTMLInputElement;
@@ -97,6 +100,8 @@ Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep
 		} else if (mode === 'first') {
 			lastFrame = null;
 		}
+		// Any manual mode change means the starting image is no longer a continuation.
+		continuationSource = null;
 		markPromptForReview();
 	};
 
@@ -138,8 +143,11 @@ Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep
 		if (!file) return;
 		try {
 			const frame = await readFrame(file);
-			if (role === 'first') firstFrame = frame;
-			else lastFrame = frame;
+			if (role === 'first') {
+				firstFrame = frame;
+				// A hand-picked first frame replaces any captured continuation frame.
+				continuationSource = null;
+			} else lastFrame = frame;
 			markPromptForReview();
 		} catch (error) {
 			toast.error(`${error}`);
@@ -155,6 +163,90 @@ Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep
 	const handleDrop = async (event: DragEvent, role: FrameRole) => {
 		event.preventDefault();
 		await setFrame(role, event.dataTransfer?.files?.[0]);
+	};
+
+	// Grab the last rendered frame of an existing clip so it can anchor the next one.
+	const captureFinalFrame = async (source: GeneratedVideo): Promise<FrameAsset> => {
+		const response = await fetch(source.url, {
+			headers: { Authorization: `Bearer ${localStorage.token}` }
+		});
+		if (!response.ok) throw new Error('The source video could not be read.');
+		// Read through a blob URL so the canvas stays untainted and auth is not re-negotiated.
+		const objectUrl = URL.createObjectURL(await response.blob());
+		const element = document.createElement('video');
+		try {
+			element.muted = true;
+			element.playsInline = true;
+			element.preload = 'auto';
+			element.src = objectUrl;
+
+			await new Promise<void>((resolve, reject) => {
+				element.onloadeddata = () => resolve();
+				element.onerror = () => reject(new Error('The source video could not be decoded.'));
+			});
+
+			// Seeking exactly to duration usually lands past the last frame and paints nothing.
+			await new Promise<void>((resolve, reject) => {
+				element.onseeked = () => resolve();
+				element.onerror = () => reject(new Error('The final frame could not be reached.'));
+				element.currentTime = Math.max(0, (element.duration || 0) - 0.05);
+			});
+
+			const canvas = document.createElement('canvas');
+			canvas.width = element.videoWidth;
+			canvas.height = element.videoHeight;
+			const context = canvas.getContext('2d');
+			if (!context || !canvas.width || !canvas.height) {
+				throw new Error('The final frame could not be captured.');
+			}
+			context.drawImage(element, 0, 0, canvas.width, canvas.height);
+			const dataUrl = canvas.toDataURL('image/png');
+			return {
+				name: `continuation-${source.seed || 'clip'}.png`,
+				type: 'image/png',
+				size: Math.round((dataUrl.length - dataUrl.indexOf(',') - 1) * 0.75),
+				width: canvas.width,
+				height: canvas.height,
+				dataUrl
+			};
+		} finally {
+			element.src = '';
+			URL.revokeObjectURL(objectUrl);
+		}
+	};
+
+	const continueFromVideo = async (source: GeneratedVideo) => {
+		capturingFrame = true;
+		try {
+			const frame = await captureFinalFrame(source);
+			workflowMode = 'first';
+			firstFrame = frame;
+			lastFrame = null;
+			continuationSource = source;
+			promptApproved = false;
+			// A continuation is a new shot, so let the backend pick a fresh seed.
+			seed = '';
+			if (['16:9', '9:16', '1:1'].includes(source.aspect_ratio)) {
+				aspectRatio = source.aspect_ratio as AspectRatio;
+			}
+			if (source.megapixels === 0.2 || source.megapixels === 0.4) {
+				megapixels = source.megapixels;
+			}
+			// The video cards sit below the settings panel, so bring the editor back into view.
+			scrollContainer?.scrollTo({ top: 0, behavior: 'smooth' });
+			toast.success('Final frame captured. Describe what happens next.');
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			capturingFrame = false;
+		}
+	};
+
+	const clearContinuation = () => {
+		continuationSource = null;
+		firstFrame = null;
+		workflowMode = 'text';
+		markPromptForReview();
 	};
 
 	const frameMetadata = () => {
@@ -210,7 +302,17 @@ Hard constraints:
 
 Frame metadata only (the image pixels are intentionally unavailable to you):
 ${frameMetadata()}
-
+${
+	continuationSource
+		? `
+This clip is a direct continuation. The first-frame anchor is the final frame of the previous clip, so the new shot must begin exactly where that one ended. The previous clip's brief was:
+---
+${continuationSource.prompt}
+---
+Carry over the same subjects, setting, lighting, wardrobe, and audio character. Advance the action into new beats; do not restate or replay what already happened. Restart the timeline at [Shot 1] with no timestamp.
+`
+		: ''
+}
 Write the final MiniMax H3 production brief now.`
 					}
 				]
@@ -410,7 +512,7 @@ Write the final MiniMax H3 production brief now.`
 	</nav>
 
 	{#if loaded}
-		<div class="flex-1 overflow-y-auto">
+		<div class="flex-1 overflow-y-auto" bind:this={scrollContainer}>
 			<div class="mx-auto flex w-full max-w-7xl flex-col gap-5 p-4 lg:p-6">
 				<div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
 					<main class="flex min-w-0 flex-col gap-5">
@@ -422,6 +524,21 @@ Write the final MiniMax H3 production brief now.`
 									ComfyUI.
 								</p>
 							</div>
+							{#if continuationSource}
+								<div
+									class="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs dark:border-blue-900 dark:bg-blue-950/40"
+								>
+									<span class="text-blue-800 dark:text-blue-200">
+										Continuing from a {continuationSource.duration}s clip. Its final frame is the
+										starting image and its brief is passed to the prompt model as context, so
+										describe only what happens next.
+									</span>
+									<button
+										class="ml-auto shrink-0 font-medium text-blue-800 hover:underline dark:text-blue-200"
+										on:click={clearContinuation}>Start fresh instead</button
+									>
+								</div>
+							{/if}
 							<div class="grid grid-cols-3 gap-1 rounded-xl bg-gray-100 p-1 dark:bg-gray-850">
 								{#each [{ id: 'text', label: 'Text' }, { id: 'first', label: 'Image' }, { id: 'first-last', label: 'First + last' }] as item}
 									<button
@@ -438,7 +555,7 @@ Write the final MiniMax H3 production brief now.`
 								<div
 									class="mt-4 grid gap-3 {workflowMode === 'first-last' ? 'sm:grid-cols-2' : ''}"
 								>
-									{#each workflowMode === 'first-last' ? [{ role: 'first', label: 'First frame', frame: firstFrame }, { role: 'last', label: 'Last frame', frame: lastFrame }] : [{ role: 'first', label: 'Starting image', frame: firstFrame }] as slot}
+									{#each workflowMode === 'first-last' ? [{ role: 'first', label: 'First frame', frame: firstFrame }, { role: 'last', label: 'Last frame', frame: lastFrame }] : [{ role: 'first', label: continuationSource ? 'Final frame of the previous clip' : 'Starting image', frame: firstFrame }] as slot}
 										<div>
 											<div class="mb-1.5 text-xs font-medium text-gray-600 dark:text-gray-300">
 												{slot.label}
@@ -693,6 +810,12 @@ Write the final MiniMax H3 production brief now.`
 								<span>{video.duration}s | {video.aspect_ratio} | seed {video.seed}</span>
 								<div class="ml-auto flex shrink-0 gap-3">
 									<button
+										class="font-medium text-gray-800 hover:underline disabled:opacity-40 dark:text-gray-200"
+										disabled={capturingFrame || generating}
+										on:click={() => continueFromVideo(video)}
+										>{capturingFrame ? 'Capturing...' : 'Continue from end'}</button
+									>
+									<button
 										class="font-medium text-gray-800 hover:underline dark:text-gray-200"
 										on:click={() => reuseVideoPrompt(video)}>Use prompt</button
 									>
@@ -757,6 +880,12 @@ Write the final MiniMax H3 production brief now.`
 										<span>{video.duration}s | {video.aspect_ratio} | seed {video.seed}</span>
 										<span class="text-gray-400">{formatVideoDate(video.created_at)}</span>
 										<div class="ml-auto flex shrink-0 gap-3">
+											<button
+												class="font-medium text-gray-800 hover:underline disabled:opacity-40 dark:text-gray-200"
+												disabled={capturingFrame || generating}
+												on:click={() => continueFromVideo(video)}
+												>{capturingFrame ? 'Capturing...' : 'Continue from end'}</button
+											>
 											<button
 												class="font-medium text-gray-800 hover:underline dark:text-gray-200"
 												on:click={() => reuseVideoPrompt(video)}>Use prompt</button

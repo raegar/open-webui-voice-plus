@@ -49,6 +49,16 @@ Flow:
 
 The current video and the history are distinct pieces of state (`currentVideo` and `videoHistory`). When a new generation starts, `archiveCurrentVideo()` moves the on-screen video into the history list, so the Current video section always shows exactly one result — the newest. Refreshing the history filters out the current video by URL, because the backend has already persisted it and it would otherwise appear twice.
 
+### Continuing a clip
+
+Every video card (current and history) has **Continue from end**, which chains clips into a longer sequence. `captureFinalFrame()` fetches the MP4 with the bearer token, wraps it in a blob URL, seeks a decoded `<video>` element to `duration - 0.05`, and paints that frame to a canvas as a PNG data URL. Seeking to exactly `duration` lands past the last frame and paints nothing, so the epsilon is required. The blob URL keeps the canvas untainted and avoids re-negotiating auth on the media element.
+
+The captured frame becomes the first-frame anchor: `continueFromVideo()` switches to `first` mode, copies the source clip's aspect ratio and megapixels so the frame matches the workflow resolution, and clears the seed so the new shot gets a fresh random one. There is **no new backend mode** — a continuation is an ordinary `first` / `image` generation whose starting image happens to be captured rather than uploaded.
+
+`continuationSource` holds the source clip while the continuation is being set up. It drives a banner in the Create section, relabels the frame slot, and appends the previous clip's brief to the drafting request so the model writes the next shot instead of restating the last one. It is cleared by `selectMode()` and by uploading a first frame by hand, since either means the anchor is no longer a continuation.
+
+Layout note: the Current video and Video history sections sit **below** the two-column grid, not inside `<main>`. They were originally in the main column, which put the Generate button after the entire history in document order and made it unreachable without scrolling past every past clip. Keep the settings panel ahead of both results sections in document order.
+
 Reference-to-Video is intentionally hidden/not implemented. It needs a model that is not installed in the current ComfyUI setup.
 
 ## Code map
@@ -229,6 +239,8 @@ Never use `docker rm -v` here: the `open-webui` volume contains user data. Plain
 - Keep regular chat on the text-only pipeline unless the product requirement explicitly changes.
 - The history list contains adult content beyond the most recent few items. Do not open, render, or inspect history media when working on this page; change the code and let the user verify visually.
 - The generation response has no `id`, so the current video is deduplicated against the refreshed history by `url`. Give the response an `id` if a sturdier key is ever needed.
+- Continuation captures the final frame in the browser and re-uploads it as a PNG data URL, so each link in a chain is re-encoded. A backend ffmpeg extraction would avoid the round trip and the generation loss if chains get long.
+- Continuation chains are not recorded anywhere. Nothing in the stored metadata links a clip to the one it continues from, so a multi-clip sequence cannot be reassembled after a reload. Add a `continued_from` file ID to the generation metadata if stitching or sequence views are ever wanted.
 
 ## Safe working rules for Claude
 
