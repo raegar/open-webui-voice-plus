@@ -4,7 +4,7 @@
 	import { toast } from 'svelte-sonner';
 
 	import { generateOpenAIChatCompletion } from '$lib/apis/openai';
-	import { videoGenerations } from '$lib/apis/videos';
+	import { getVideoHistory, videoGenerations } from '$lib/apis/videos';
 	import Selector from '$lib/components/chat/ModelSelector/Selector.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Sidebar from '$lib/components/icons/Sidebar.svelte';
@@ -26,11 +26,17 @@
 	};
 	type GeneratedVideo = {
 		url: string;
+		id?: string;
+		filename?: string;
 		prompt: string;
 		mode: string;
 		duration: number;
 		aspect_ratio: string;
 		seed: string | number;
+		megapixels?: number;
+		has_first_frame?: boolean;
+		has_last_frame?: boolean;
+		created_at?: number;
 	};
 
 	const PROMPT_SYSTEM = `You are a prompt-enrichment engine for MiniMax H3, which generates video and synchronized stereo audio. Turn the user's creative direction into one detailed, unambiguous production brief. Preserve the user's intent and output only the brief: no preamble, markdown, JSON, or commentary.
@@ -65,6 +71,7 @@ Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep
 	let elapsedSeconds = 0;
 	let generatedVideos: GeneratedVideo[] = [];
 	let firstFileInput: HTMLInputElement;
+	let historyLoading = false;
 	let lastFileInput: HTMLInputElement;
 	let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -286,6 +293,46 @@ Write the final MiniMax H3 production brief now.`
 		}
 	};
 
+	const loadVideoHistory = async (showSuccess = false) => {
+		historyLoading = true;
+		try {
+			generatedVideos = await getVideoHistory(localStorage.token, 50);
+			if (showSuccess) {
+				toast.success('Video history refreshed.');
+			}
+		} catch (error) {
+			toast.error(`Video history could not be loaded: ${error}`);
+		} finally {
+			historyLoading = false;
+		}
+	};
+
+	const reuseVideoPrompt = (video: GeneratedVideo) => {
+		const mode: WorkflowMode =
+			video.mode === 'first-last' ? 'first-last' : video.mode === 'image' ? 'first' : 'text';
+		selectMode(mode);
+		productionPrompt = video.prompt;
+		promptApproved = false;
+		if (['16:9', '9:16', '1:1'].includes(video.aspect_ratio)) {
+			aspectRatio = video.aspect_ratio as AspectRatio;
+		}
+		if (video.megapixels === 0.2 || video.megapixels === 0.4) {
+			megapixels = video.megapixels;
+		}
+		if (video.duration === 3 || video.duration === 5 || video.duration === 10) {
+			duration = video.duration;
+		}
+		seed = video.seed;
+		toast.success(
+			mode === 'text'
+				? 'Prompt and settings loaded for review.'
+				: 'Prompt and settings loaded. Reattach the frame images before generating.'
+		);
+	};
+
+	const formatVideoDate = (timestamp?: number) =>
+		timestamp ? new Date(timestamp * 1000).toLocaleString() : 'Just generated';
+
 	const downloadVideo = async (video: GeneratedVideo) => {
 		try {
 			const response = await fetch(video.url, {
@@ -314,12 +361,13 @@ Write the final MiniMax H3 production brief now.`
 			availableModels[0]?.id ??
 			'';
 		loaded = true;
+		await loadVideoHistory();
 	});
 	onDestroy(stopElapsedTimer);
 </script>
 
 <svelte:head>
-	<title>Video Studio ? {$WEBUI_NAME}</title>
+	<title>Video Studio - {$WEBUI_NAME}</title>
 </svelte:head>
 
 <div
@@ -345,7 +393,7 @@ Write the final MiniMax H3 production brief now.`
 			<VideoCamera className="size-5" />
 			<span>Video Studio</span>
 		</div>
-		<div class="ml-auto text-xs text-gray-500">MiniMax H3 ? ComfyUI</div>
+		<div class="ml-auto text-xs text-gray-500">MiniMax H3 | ComfyUI</div>
 	</nav>
 
 	{#if loaded}
@@ -397,7 +445,7 @@ Write the final MiniMax H3 production brief now.`
 												<span
 													class="absolute bottom-2 left-2 rounded-md bg-black/70 px-2 py-1 text-xs text-white"
 												>
-													{slot.frame.width}?{slot.frame.height}
+													{slot.frame.width}x{slot.frame.height}
 												</span>
 											{:else}
 												<span>Drop an image or click to browse</span>
@@ -460,7 +508,7 @@ Write the final MiniMax H3 production brief now.`
 								on:click={draftPrompt}
 							>
 								{drafting
-									? 'Drafting prompt?'
+									? 'Drafting prompt...'
 									: productionPrompt
 										? 'Redraft H3 prompt'
 										: 'Draft H3 prompt'}
@@ -501,6 +549,35 @@ Write the final MiniMax H3 production brief now.`
 						</div>
 					</section>
 
+					<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+						<div class="flex items-center justify-between gap-3">
+							<div>
+								<h2 class="font-semibold">Video history</h2>
+								<p class="mt-0.5 text-xs text-gray-500">Your 50 most recent generated videos.</p>
+							</div>
+							<button
+								class="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-850"
+								disabled={historyLoading}
+								on:click={() => loadVideoHistory(true)}
+							>
+								{historyLoading ? 'Refreshing...' : 'Refresh'}
+							</button>
+						</div>
+						{#if historyLoading && generatedVideos.length === 0}
+							<p
+								class="mt-4 rounded-xl bg-gray-50 py-8 text-center text-sm text-gray-500 dark:bg-gray-900"
+							>
+								Loading video history...
+							</p>
+						{:else if generatedVideos.length === 0}
+							<p
+								class="mt-4 rounded-xl bg-gray-50 py-8 text-center text-sm text-gray-500 dark:bg-gray-900"
+							>
+								Generated videos will appear here.
+							</p>
+						{/if}
+					</section>
+
 					{#if generatedVideos.length > 0}
 						<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
 							<h2 class="mb-3 font-semibold">Generated videos</h2>
@@ -515,7 +592,14 @@ Write the final MiniMax H3 production brief now.`
 											controls
 										></video>
 										<div class="flex items-center justify-between gap-3 p-3 text-xs text-gray-500">
-											<span>{video.duration}s ? {video.aspect_ratio} ? seed {video.seed}</span>
+											<span>{video.duration}s | {video.aspect_ratio} | seed {video.seed}</span>
+											<div class="ml-auto flex shrink-0 gap-3">
+												<button
+													class="font-medium text-gray-800 hover:underline dark:text-gray-200"
+													on:click={() => reuseVideoPrompt(video)}>Use prompt</button
+												>
+												<span class="text-gray-400">{formatVideoDate(video.created_at)}</span>
+											</div>
 											<button
 												class="font-medium text-gray-800 hover:underline dark:text-gray-200"
 												on:click={() => downloadVideo(video)}>Download</button
@@ -551,8 +635,8 @@ Write the final MiniMax H3 production brief now.`
 								class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
 								bind:value={megapixels}
 							>
-								<option value={0.2}>0.2 MP ? faster</option>
-								<option value={0.4}>0.4 MP ? sharper</option>
+								<option value={0.2}>0.2 MP - faster</option>
+								<option value={0.4}>0.4 MP - sharper</option>
 							</select>
 						</label>
 						<label class="block">
@@ -585,7 +669,7 @@ Write the final MiniMax H3 production brief now.`
 						on:click={generateVideo}
 					>
 						<VideoCamera className="size-4.5" strokeWidth="2" />
-						{generating ? `Generating? ${elapsedSeconds}s` : 'Generate video'}
+						{generating ? `Generating... ${elapsedSeconds}s` : 'Generate video'}
 					</button>
 					{#if generating}
 						<p class="mt-2 text-center text-xs text-gray-500">
@@ -612,7 +696,7 @@ Write the final MiniMax H3 production brief now.`
 		</div>
 	{:else}
 		<div class="flex flex-1 items-center justify-center text-sm text-gray-500">
-			Loading Video Studio?
+			Loading Video Studio...
 		</div>
 	{/if}
 </div>

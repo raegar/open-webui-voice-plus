@@ -8,6 +8,30 @@ export type VideoGenerationOptions = {
 	first_frame_data_url?: string;
 	last_frame_data_url?: string;
 };
+export const getVideoHistory = async (token: string, limit: number = 50) => {
+	let error: string | null = null;
+	const searchParams = new URLSearchParams({ limit: String(limit) });
+	const res = await fetch(`${VIDEOS_API_BASE_URL}/history?${searchParams.toString()}`, {
+		method: 'GET',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			...(token && { authorization: `Bearer ${token}` })
+		}
+	})
+		.then(async (response) => {
+			if (!response.ok) throw await response.json();
+			return response.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err?.detail ?? 'Server connection failed';
+			return [];
+		});
+
+	if (error) throw error;
+	return res;
+};
 
 export const videoGenerations = async (
 	token: string,

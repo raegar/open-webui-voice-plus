@@ -5,11 +5,12 @@ import io
 import random
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.models.chats import Chats
+from open_webui.models.files import Files
 from open_webui.routers.files import upload_file_handler
 from open_webui.utils.access_control import has_permission
 from open_webui.utils.auth import get_verified_user
@@ -116,6 +117,67 @@ def _upload_video(request, video_data, filename, content_type, metadata, user):
             user_id=user.id,
         )
     return file_item, request.app.url_path_for("get_file_content_by_id", id=file_item.id)
+
+def _get_video_history_items(request: Request, user, limit: int) -> list[dict]:
+    files = sorted(
+        Files.get_files_by_user_id(user.id),
+        key=lambda item: (item.created_at or 0, item.id),
+        reverse=True,
+    )
+    items = []
+    for file_item in files:
+        meta = file_item.meta if isinstance(file_item.meta, dict) else {}
+        generation = meta.get("data") if isinstance(meta.get("data"), dict) else {}
+        content_type = meta.get("content_type") or generation.get("content_type")
+        prompt = generation.get("prompt")
+        if not (
+            isinstance(content_type, str)
+            and content_type.startswith("video/")
+            and isinstance(prompt, str)
+            and prompt.strip()
+        ):
+            continue
+        seed = generation.get("seed")
+        items.append(
+            {
+                "id": file_item.id,
+                "url": str(
+                    request.app.url_path_for(
+                        "get_file_content_by_id", id=file_item.id
+                    )
+                ),
+                "filename": file_item.filename,
+                "content_type": content_type,
+                "prompt": prompt,
+                "mode": generation.get("mode", "text"),
+                "aspect_ratio": generation.get("aspect_ratio", "16:9"),
+                "megapixels": generation.get("megapixels", 0.2),
+                "duration": generation.get("duration", 3),
+                "seed": str(seed) if seed is not None else "",
+                "has_first_frame": bool(generation.get("has_first_frame", False)),
+                "has_last_frame": bool(generation.get("has_last_frame", False)),
+                "created_at": file_item.created_at,
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
+@router.get("/history")
+async def get_video_history(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=100),
+    user=Depends(get_verified_user),
+):
+    if not request.app.state.config.ENABLE_VIDEO_GENERATION:
+        raise HTTPException(status_code=403, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
+    if user.role != "admin" and not has_permission(
+        user.id, "features.image_generation", request.app.state.config.USER_PERMISSIONS
+    ):
+        raise HTTPException(status_code=403, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
+    return _get_video_history_items(request, user, limit)
+
 
 
 async def video_generations(
