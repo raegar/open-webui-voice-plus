@@ -411,363 +411,367 @@ Write the final MiniMax H3 production brief now.`
 
 	{#if loaded}
 		<div class="flex-1 overflow-y-auto">
-			<div
-				class="mx-auto grid w-full max-w-7xl gap-5 p-4 lg:grid-cols-[minmax(0,1fr)_22rem] lg:p-6"
-			>
-				<main class="flex min-w-0 flex-col gap-5">
-					<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
-						<div class="mb-4">
-							<h1 class="text-xl font-semibold">Create a video</h1>
-							<p class="mt-1 text-sm text-gray-500">
-								Shape the idea with a chat model, approve the resulting H3 prompt, then send it to
-								ComfyUI.
-							</p>
-						</div>
-						<div class="grid grid-cols-3 gap-1 rounded-xl bg-gray-100 p-1 dark:bg-gray-850">
-							{#each [{ id: 'text', label: 'Text' }, { id: 'first', label: 'Image' }, { id: 'first-last', label: 'First + last' }] as item}
-								<button
-									class="rounded-lg px-2 py-2 text-sm transition {workflowMode === item.id
-										? 'bg-white font-medium shadow-sm dark:bg-gray-700'
-										: 'text-gray-500 hover:text-gray-900 dark:hover:text-white'}"
-									on:click={() => selectMode(item.id as WorkflowMode)}
-								>
-									{item.label}
-								</button>
-							{/each}
-						</div>
-						{#if workflowMode !== 'text'}
-							<div class="mt-4 grid gap-3 {workflowMode === 'first-last' ? 'sm:grid-cols-2' : ''}">
-								{#each workflowMode === 'first-last' ? [{ role: 'first', label: 'First frame', frame: firstFrame }, { role: 'last', label: 'Last frame', frame: lastFrame }] : [{ role: 'first', label: 'Starting image', frame: firstFrame }] as slot}
-									<div>
-										<div class="mb-1.5 text-xs font-medium text-gray-600 dark:text-gray-300">
-											{slot.label}
-										</div>
-										<button
-											class="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-xl border border-dashed border-gray-300 bg-gray-50 text-sm text-gray-500 hover:border-gray-500 dark:border-gray-700 dark:bg-gray-900"
-											on:click={() =>
-												slot.role === 'first' ? firstFileInput.click() : lastFileInput.click()}
-											on:drop={(event) => handleDrop(event, slot.role as FrameRole)}
-											on:dragover|preventDefault
-										>
-											{#if slot.frame}
-												<img
-													src={slot.frame.dataUrl}
-													alt={slot.label}
-													class="absolute inset-0 size-full object-contain"
-												/>
-												<span
-													class="absolute bottom-2 left-2 rounded-md bg-black/70 px-2 py-1 text-xs text-white"
-												>
-													{slot.frame.width}x{slot.frame.height}
-												</span>
-											{:else}
-												<span>Drop an image or click to browse</span>
-											{/if}
-										</button>
-									</div>
-								{/each}
-							</div>
-							<input
-								class="hidden"
-								type="file"
-								accept="image/png,image/jpeg,image/webp"
-								bind:this={firstFileInput}
-								on:change={(event) => handleFileInput(event, 'first')}
-							/>
-							<input
-								class="hidden"
-								type="file"
-								accept="image/png,image/jpeg,image/webp"
-								bind:this={lastFileInput}
-								on:change={(event) => handleFileInput(event, 'last')}
-							/>
-							<p class="mt-2 text-xs text-gray-500">
-								Frame pixels go only to the ComfyUI generation workflow. The prompt model receives
-								filename, dimensions, type, size, and frame role.
-							</p>
-						{/if}
-					</section>
-
-					<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
-						<div class="mb-3 flex items-center justify-between gap-3">
-							<div>
-								<h2 class="font-semibold">1. Creative direction</h2>
-								<p class="mt-0.5 text-xs text-gray-500">Plain-language ideas are enough.</p>
-							</div>
-							<div class="w-64 max-w-[50%]">
-								<Selector
-									placeholder="Select a prompt model"
-									items={availableModels.map((model) => ({
-										value: model.id,
-										label: model.name,
-										model
-									}))}
-									bind:value={selectedModelId}
-									className="w-full"
-									triggerClassName="text-sm"
-								/>
-							</div>
-						</div>
-						<textarea
-							class="min-h-32 w-full resize-y rounded-xl border border-gray-200 bg-transparent p-3 text-sm outline-none focus:border-gray-500 dark:border-gray-700"
-							placeholder="Example: A rain-soaked detective pauses under a flickering neon sign, hears footsteps behind her, then turns toward camera. Slow handheld push-in, realistic night ambience, no captions."
-							bind:value={creativeDirection}
-							on:input={markPromptForReview}
-						></textarea>
-						<div class="mt-3 flex justify-end">
-							<button
-								class="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
-								disabled={drafting || !selectedModelId || !creativeDirection.trim()}
-								on:click={draftPrompt}
-							>
-								{drafting
-									? 'Drafting prompt...'
-									: productionPrompt
-										? 'Redraft H3 prompt'
-										: 'Draft H3 prompt'}
-							</button>
-						</div>
-					</section>
-
-					<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
-						<div class="mb-3 flex items-center justify-between">
-							<div>
-								<h2 class="font-semibold">2. Review the production prompt</h2>
-								<p class="mt-0.5 text-xs text-gray-500">
-									Edit anything you want. Edits require approval again.
+			<div class="mx-auto flex w-full max-w-7xl flex-col gap-5 p-4 lg:p-6">
+				<div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
+					<main class="flex min-w-0 flex-col gap-5">
+						<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+							<div class="mb-4">
+								<h1 class="text-xl font-semibold">Create a video</h1>
+								<p class="mt-1 text-sm text-gray-500">
+									Shape the idea with a chat model, approve the resulting H3 prompt, then send it to
+									ComfyUI.
 								</p>
 							</div>
-							<span
-								class="rounded-full px-2.5 py-1 text-xs {promptApproved
-									? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300'
-									: 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'}"
-							>
-								{promptApproved ? 'Approved' : 'Needs approval'}
-							</span>
-						</div>
-						<textarea
-							class="min-h-80 w-full resize-y rounded-xl border border-gray-200 bg-transparent p-3 font-mono text-xs leading-5 outline-none focus:border-gray-500 dark:border-gray-700"
-							placeholder="The generated MiniMax H3 production brief will appear here. You can also write one directly."
-							bind:value={productionPrompt}
-							on:input={markPromptForReview}
-						></textarea>
-						<div class="mt-3 flex justify-end">
-							<button
-								class="rounded-xl border border-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-850"
-								disabled={!productionPrompt.trim()}
-								on:click={approvePrompt}
-							>
-								{promptApproved ? 'Prompt approved' : 'Approve this prompt'}
-							</button>
-						</div>
-					</section>
-
-					<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
-						<div class="mb-3 flex items-center justify-between gap-3">
-							<div>
-								<h2 class="font-semibold">Current video</h2>
-								<p class="mt-0.5 text-xs text-gray-500">
-									The latest result. It moves to the history below when the next generation starts.
-								</p>
-							</div>
-							{#if currentVideo}
-								<span class="shrink-0 text-xs text-gray-400"
-									>{formatVideoDate(currentVideo.created_at)}</span
-								>
-							{/if}
-						</div>
-						{#if generating}
-							<p
-								class="rounded-xl bg-gray-50 py-10 text-center text-sm text-gray-500 dark:bg-gray-900"
-							>
-								Rendering with ComfyUI... {elapsedSeconds}s
-							</p>
-						{:else if currentVideo}
-							{@const video = currentVideo}
-							<article
-								class="overflow-hidden rounded-xl border border-gray-200 dark:border-gray-800"
-							>
-								<!-- svelte-ignore a11y-media-has-caption -->
-								<video class="aspect-video w-full bg-black object-contain" src={video.url} controls
-								></video>
-								<div class="flex flex-wrap items-center gap-3 p-3 text-xs text-gray-500">
-									<span>{video.duration}s | {video.aspect_ratio} | seed {video.seed}</span>
-									<div class="ml-auto flex shrink-0 gap-3">
-										<button
-											class="font-medium text-gray-800 hover:underline dark:text-gray-200"
-											on:click={() => reuseVideoPrompt(video)}>Use prompt</button
-										>
-										<button
-											class="font-medium text-gray-800 hover:underline dark:text-gray-200"
-											on:click={() => downloadVideo(video)}>Download</button
-										>
-									</div>
-								</div>
-							</article>
-						{:else}
-							<p
-								class="rounded-xl bg-gray-50 py-10 text-center text-sm text-gray-500 dark:bg-gray-900"
-							>
-								Your next generated video will appear here.
-							</p>
-						{/if}
-					</section>
-
-					<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
-						<div class="flex items-center justify-between gap-3">
-							<div>
-								<h2 class="font-semibold">Video history</h2>
-								<p class="mt-0.5 text-xs text-gray-500">Your 50 most recent generated videos.</p>
-							</div>
-							<button
-								class="shrink-0 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-850"
-								disabled={historyLoading}
-								on:click={() => loadVideoHistory(true)}
-							>
-								{historyLoading ? 'Refreshing...' : 'Refresh'}
-							</button>
-						</div>
-						{#if historyLoading && videoHistory.length === 0}
-							<p
-								class="mt-4 rounded-xl bg-gray-50 py-8 text-center text-sm text-gray-500 dark:bg-gray-900"
-							>
-								Loading video history...
-							</p>
-						{:else if videoHistory.length === 0}
-							<p
-								class="mt-4 rounded-xl bg-gray-50 py-8 text-center text-sm text-gray-500 dark:bg-gray-900"
-							>
-								Previously generated videos will appear here.
-							</p>
-						{:else}
-							<div class="mt-4 grid gap-4 xl:grid-cols-2">
-								{#each videoHistory as video (video.url)}
-									<article
-										class="overflow-hidden rounded-xl border border-gray-200 dark:border-gray-800"
+							<div class="grid grid-cols-3 gap-1 rounded-xl bg-gray-100 p-1 dark:bg-gray-850">
+								{#each [{ id: 'text', label: 'Text' }, { id: 'first', label: 'Image' }, { id: 'first-last', label: 'First + last' }] as item}
+									<button
+										class="rounded-lg px-2 py-2 text-sm transition {workflowMode === item.id
+											? 'bg-white font-medium shadow-sm dark:bg-gray-700'
+											: 'text-gray-500 hover:text-gray-900 dark:hover:text-white'}"
+										on:click={() => selectMode(item.id as WorkflowMode)}
 									>
-										<!-- svelte-ignore a11y-media-has-caption -->
-										<video
-											class="aspect-video w-full bg-black object-contain"
-											src={video.url}
-											preload="metadata"
-											controls
-										></video>
-										<div
-											class="flex flex-wrap items-center gap-x-3 gap-y-1 p-3 text-xs text-gray-500"
-										>
-											<span>{video.duration}s | {video.aspect_ratio} | seed {video.seed}</span>
-											<span class="text-gray-400">{formatVideoDate(video.created_at)}</span>
-											<div class="ml-auto flex shrink-0 gap-3">
-												<button
-													class="font-medium text-gray-800 hover:underline dark:text-gray-200"
-													on:click={() => reuseVideoPrompt(video)}>Use prompt</button
-												>
-												<button
-													class="font-medium text-gray-800 hover:underline dark:text-gray-200"
-													on:click={() => downloadVideo(video)}>Download</button
-												>
-											</div>
-										</div>
-									</article>
+										{item.label}
+									</button>
 								{/each}
 							</div>
-						{/if}
-					</section>
-				</main>
-
-				<aside
-					class="h-fit rounded-2xl border border-gray-200 p-4 dark:border-gray-800 lg:sticky lg:top-4"
-				>
-					<h2 class="font-semibold">3. Generation settings</h2>
-					<div class="mt-4 space-y-4">
-						<label class="block">
-							<span class="mb-1.5 block text-xs font-medium">Aspect ratio</span>
-							<select
-								class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
-								bind:value={aspectRatio}
-								on:change={markPromptForReview}
-							>
-								<option value="16:9">16:9 landscape</option>
-								<option value="9:16">9:16 portrait</option>
-								<option value="1:1">1:1 square</option>
-							</select>
-						</label>
-						<label class="block">
-							<span class="mb-1.5 block text-xs font-medium">Resolution budget</span>
-							<select
-								class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
-								bind:value={megapixels}
-							>
-								<option value={0.2}>0.2 MP - faster</option>
-								<option value={0.4}>0.4 MP - sharper</option>
-							</select>
-						</label>
-						<label class="block">
-							<span class="mb-1.5 block text-xs font-medium">Duration</span>
-							<select
-								class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
-								bind:value={duration}
-								on:change={markPromptForReview}
-							>
-								<option value={3}>3 seconds</option>
-								<option value={5}>5 seconds</option>
-								<option value={10}>10 seconds</option>
-							</select>
-						</label>
-						<div>
-							<div class="mb-1.5 flex items-center justify-between text-xs font-medium">
-								<label for="video-seed">Seed</label>
-								<button
-									class="font-normal text-gray-500 hover:underline disabled:opacity-40"
-									disabled={seed === null || seed === ''}
-									on:click={() => (seed = '')}
+							{#if workflowMode !== 'text'}
+								<div
+									class="mt-4 grid gap-3 {workflowMode === 'first-last' ? 'sm:grid-cols-2' : ''}"
 								>
-									Clear for random
+									{#each workflowMode === 'first-last' ? [{ role: 'first', label: 'First frame', frame: firstFrame }, { role: 'last', label: 'Last frame', frame: lastFrame }] : [{ role: 'first', label: 'Starting image', frame: firstFrame }] as slot}
+										<div>
+											<div class="mb-1.5 text-xs font-medium text-gray-600 dark:text-gray-300">
+												{slot.label}
+											</div>
+											<button
+												class="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-xl border border-dashed border-gray-300 bg-gray-50 text-sm text-gray-500 hover:border-gray-500 dark:border-gray-700 dark:bg-gray-900"
+												on:click={() =>
+													slot.role === 'first' ? firstFileInput.click() : lastFileInput.click()}
+												on:drop={(event) => handleDrop(event, slot.role as FrameRole)}
+												on:dragover|preventDefault
+											>
+												{#if slot.frame}
+													<img
+														src={slot.frame.dataUrl}
+														alt={slot.label}
+														class="absolute inset-0 size-full object-contain"
+													/>
+													<span
+														class="absolute bottom-2 left-2 rounded-md bg-black/70 px-2 py-1 text-xs text-white"
+													>
+														{slot.frame.width}x{slot.frame.height}
+													</span>
+												{:else}
+													<span>Drop an image or click to browse</span>
+												{/if}
+											</button>
+										</div>
+									{/each}
+								</div>
+								<input
+									class="hidden"
+									type="file"
+									accept="image/png,image/jpeg,image/webp"
+									bind:this={firstFileInput}
+									on:change={(event) => handleFileInput(event, 'first')}
+								/>
+								<input
+									class="hidden"
+									type="file"
+									accept="image/png,image/jpeg,image/webp"
+									bind:this={lastFileInput}
+									on:change={(event) => handleFileInput(event, 'last')}
+								/>
+								<p class="mt-2 text-xs text-gray-500">
+									Frame pixels go only to the ComfyUI generation workflow. The prompt model receives
+									filename, dimensions, type, size, and frame role.
+								</p>
+							{/if}
+						</section>
+
+						<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+							<div class="mb-3 flex items-center justify-between gap-3">
+								<div>
+									<h2 class="font-semibold">1. Creative direction</h2>
+									<p class="mt-0.5 text-xs text-gray-500">Plain-language ideas are enough.</p>
+								</div>
+								<div class="w-64 max-w-[50%]">
+									<Selector
+										placeholder="Select a prompt model"
+										items={availableModels.map((model) => ({
+											value: model.id,
+											label: model.name,
+											model
+										}))}
+										bind:value={selectedModelId}
+										className="w-full"
+										triggerClassName="text-sm"
+									/>
+								</div>
+							</div>
+							<textarea
+								class="min-h-32 w-full resize-y rounded-xl border border-gray-200 bg-transparent p-3 text-sm outline-none focus:border-gray-500 dark:border-gray-700"
+								placeholder="Example: A rain-soaked detective pauses under a flickering neon sign, hears footsteps behind her, then turns toward camera. Slow handheld push-in, realistic night ambience, no captions."
+								bind:value={creativeDirection}
+								on:input={markPromptForReview}
+							></textarea>
+							<div class="mt-3 flex justify-end">
+								<button
+									class="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
+									disabled={drafting || !selectedModelId || !creativeDirection.trim()}
+									on:click={draftPrompt}
+								>
+									{drafting
+										? 'Drafting prompt...'
+										: productionPrompt
+											? 'Redraft H3 prompt'
+											: 'Draft H3 prompt'}
 								</button>
 							</div>
-							<input
-								id="video-seed"
-								class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
-								type="number"
-								min="0"
-								step="1"
-								placeholder="Random"
-								bind:value={seed}
-							/>
-							<p class="mt-1.5 text-xs text-gray-500">
-								Leave this blank to let each generation pick a new random seed.
+						</section>
+
+						<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+							<div class="mb-3 flex items-center justify-between">
+								<div>
+									<h2 class="font-semibold">2. Review the production prompt</h2>
+									<p class="mt-0.5 text-xs text-gray-500">
+										Edit anything you want. Edits require approval again.
+									</p>
+								</div>
+								<span
+									class="rounded-full px-2.5 py-1 text-xs {promptApproved
+										? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300'
+										: 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'}"
+								>
+									{promptApproved ? 'Approved' : 'Needs approval'}
+								</span>
+							</div>
+							<textarea
+								class="min-h-80 w-full resize-y rounded-xl border border-gray-200 bg-transparent p-3 font-mono text-xs leading-5 outline-none focus:border-gray-500 dark:border-gray-700"
+								placeholder="The generated MiniMax H3 production brief will appear here. You can also write one directly."
+								bind:value={productionPrompt}
+								on:input={markPromptForReview}
+							></textarea>
+							<div class="mt-3 flex justify-end">
+								<button
+									class="rounded-xl border border-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-850"
+									disabled={!productionPrompt.trim()}
+									on:click={approvePrompt}
+								>
+									{promptApproved ? 'Prompt approved' : 'Approve this prompt'}
+								</button>
+							</div>
+						</section>
+					</main>
+
+					<aside
+						class="h-fit rounded-2xl border border-gray-200 p-4 dark:border-gray-800 lg:sticky lg:top-4"
+					>
+						<h2 class="font-semibold">3. Generation settings</h2>
+						<div class="mt-4 space-y-4">
+							<label class="block">
+								<span class="mb-1.5 block text-xs font-medium">Aspect ratio</span>
+								<select
+									class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
+									bind:value={aspectRatio}
+									on:change={markPromptForReview}
+								>
+									<option value="16:9">16:9 landscape</option>
+									<option value="9:16">9:16 portrait</option>
+									<option value="1:1">1:1 square</option>
+								</select>
+							</label>
+							<label class="block">
+								<span class="mb-1.5 block text-xs font-medium">Resolution budget</span>
+								<select
+									class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
+									bind:value={megapixels}
+								>
+									<option value={0.2}>0.2 MP - faster</option>
+									<option value={0.4}>0.4 MP - sharper</option>
+								</select>
+							</label>
+							<label class="block">
+								<span class="mb-1.5 block text-xs font-medium">Duration</span>
+								<select
+									class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
+									bind:value={duration}
+									on:change={markPromptForReview}
+								>
+									<option value={3}>3 seconds</option>
+									<option value={5}>5 seconds</option>
+									<option value={10}>10 seconds</option>
+								</select>
+							</label>
+							<div>
+								<div class="mb-1.5 flex items-center justify-between text-xs font-medium">
+									<label for="video-seed">Seed</label>
+									<button
+										class="font-normal text-gray-500 hover:underline disabled:opacity-40"
+										disabled={seed === null || seed === ''}
+										on:click={() => (seed = '')}
+									>
+										Clear for random
+									</button>
+								</div>
+								<input
+									id="video-seed"
+									class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
+									type="number"
+									min="0"
+									step="1"
+									placeholder="Random"
+									bind:value={seed}
+								/>
+								<p class="mt-1.5 text-xs text-gray-500">
+									Leave this blank to let each generation pick a new random seed.
+								</p>
+							</div>
+						</div>
+						<button
+							class="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
+							disabled={generating || !promptApproved || !framesReady}
+							on:click={generateVideo}
+						>
+							<VideoCamera className="size-4.5" strokeWidth="2" />
+							{generating ? `Generating... ${elapsedSeconds}s` : 'Generate video'}
+						</button>
+						{#if generating}
+							<p class="mt-2 text-center text-xs text-gray-500">
+								ComfyUI is rendering. This usually takes one to several minutes.
+							</p>
+						{:else if !framesReady}
+							<p class="mt-2 text-center text-xs text-amber-600">
+								Attach the required frame images.
+							</p>
+						{:else if !promptApproved}
+							<p class="mt-2 text-center text-xs text-gray-500">
+								Approve the production prompt to continue.
+							</p>
+						{/if}
+						<div
+							class="mt-5 border-t border-gray-200 pt-4 text-xs leading-5 text-gray-500 dark:border-gray-800"
+						>
+							<p>Reference-to-Video is intentionally not exposed yet.</p>
+							<p class="mt-2">
+								The normal chat pipeline remains text-only for video generation; frame workflows
+								live only in this studio.
 							</p>
 						</div>
+					</aside>
+				</div>
+
+				<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+					<div class="mb-3 flex items-center justify-between gap-3">
+						<div>
+							<h2 class="font-semibold">Current video</h2>
+							<p class="mt-0.5 text-xs text-gray-500">
+								The latest result. It moves to the history below when the next generation starts.
+							</p>
+						</div>
+						{#if currentVideo}
+							<span class="shrink-0 text-xs text-gray-400"
+								>{formatVideoDate(currentVideo.created_at)}</span
+							>
+						{/if}
 					</div>
-					<button
-						class="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
-						disabled={generating || !promptApproved || !framesReady}
-						on:click={generateVideo}
-					>
-						<VideoCamera className="size-4.5" strokeWidth="2" />
-						{generating ? `Generating... ${elapsedSeconds}s` : 'Generate video'}
-					</button>
 					{#if generating}
-						<p class="mt-2 text-center text-xs text-gray-500">
-							ComfyUI is rendering. This usually takes one to several minutes.
+						<p
+							class="rounded-xl bg-gray-50 py-10 text-center text-sm text-gray-500 dark:bg-gray-900"
+						>
+							Rendering with ComfyUI... {elapsedSeconds}s
 						</p>
-					{:else if !framesReady}
-						<p class="mt-2 text-center text-xs text-amber-600">Attach the required frame images.</p>
-					{:else if !promptApproved}
-						<p class="mt-2 text-center text-xs text-gray-500">
-							Approve the production prompt to continue.
+					{:else if currentVideo}
+						{@const video = currentVideo}
+						<article
+							class="mx-auto w-full max-w-3xl overflow-hidden rounded-xl border border-gray-200 dark:border-gray-800"
+						>
+							<!-- svelte-ignore a11y-media-has-caption -->
+							<video class="aspect-video w-full bg-black object-contain" src={video.url} controls
+							></video>
+							<div class="flex flex-wrap items-center gap-3 p-3 text-xs text-gray-500">
+								<span>{video.duration}s | {video.aspect_ratio} | seed {video.seed}</span>
+								<div class="ml-auto flex shrink-0 gap-3">
+									<button
+										class="font-medium text-gray-800 hover:underline dark:text-gray-200"
+										on:click={() => reuseVideoPrompt(video)}>Use prompt</button
+									>
+									<button
+										class="font-medium text-gray-800 hover:underline dark:text-gray-200"
+										on:click={() => downloadVideo(video)}>Download</button
+									>
+								</div>
+							</div>
+						</article>
+					{:else}
+						<p
+							class="rounded-xl bg-gray-50 py-10 text-center text-sm text-gray-500 dark:bg-gray-900"
+						>
+							Your next generated video will appear here.
 						</p>
 					{/if}
-					<div
-						class="mt-5 border-t border-gray-200 pt-4 text-xs leading-5 text-gray-500 dark:border-gray-800"
-					>
-						<p>Reference-to-Video is intentionally not exposed yet.</p>
-						<p class="mt-2">
-							The normal chat pipeline remains text-only for video generation; frame workflows live
-							only in this studio.
-						</p>
+				</section>
+
+				<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+					<div class="flex items-center justify-between gap-3">
+						<div>
+							<h2 class="font-semibold">Video history</h2>
+							<p class="mt-0.5 text-xs text-gray-500">Your 50 most recent generated videos.</p>
+						</div>
+						<button
+							class="shrink-0 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-850"
+							disabled={historyLoading}
+							on:click={() => loadVideoHistory(true)}
+						>
+							{historyLoading ? 'Refreshing...' : 'Refresh'}
+						</button>
 					</div>
-				</aside>
+					{#if historyLoading && videoHistory.length === 0}
+						<p
+							class="mt-4 rounded-xl bg-gray-50 py-8 text-center text-sm text-gray-500 dark:bg-gray-900"
+						>
+							Loading video history...
+						</p>
+					{:else if videoHistory.length === 0}
+						<p
+							class="mt-4 rounded-xl bg-gray-50 py-8 text-center text-sm text-gray-500 dark:bg-gray-900"
+						>
+							Previously generated videos will appear here.
+						</p>
+					{:else}
+						<div class="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+							{#each videoHistory as video (video.url)}
+								<article
+									class="overflow-hidden rounded-xl border border-gray-200 dark:border-gray-800"
+								>
+									<!-- svelte-ignore a11y-media-has-caption -->
+									<video
+										class="aspect-video w-full bg-black object-contain"
+										src={video.url}
+										preload="metadata"
+										controls
+									></video>
+									<div
+										class="flex flex-wrap items-center gap-x-3 gap-y-1 p-3 text-xs text-gray-500"
+									>
+										<span>{video.duration}s | {video.aspect_ratio} | seed {video.seed}</span>
+										<span class="text-gray-400">{formatVideoDate(video.created_at)}</span>
+										<div class="ml-auto flex shrink-0 gap-3">
+											<button
+												class="font-medium text-gray-800 hover:underline dark:text-gray-200"
+												on:click={() => reuseVideoPrompt(video)}>Use prompt</button
+											>
+											<button
+												class="font-medium text-gray-800 hover:underline dark:text-gray-200"
+												on:click={() => downloadVideo(video)}>Download</button
+											>
+										</div>
+									</div>
+								</article>
+							{/each}
+						</div>
+					{/if}
+				</section>
 			</div>
 		</div>
 	{:else}
