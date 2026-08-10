@@ -17,6 +17,7 @@ from open_webui.utils.videos.comfyui import ComfyUIVideoClient
 
 
 router = APIRouter()
+NUMBER_SAFE_INTEGER_MAX = 2**53 - 1
 
 
 class CreateVideoForm(BaseModel):
@@ -124,7 +125,11 @@ async def video_generations(
     user=None,
 ):
     metadata = metadata or {}
-    seed = form_data.seed if form_data.seed is not None else random.randrange(2**63)
+    seed = (
+        form_data.seed
+        if form_data.seed is not None
+        else random.randrange(NUMBER_SAFE_INTEGER_MAX + 1)
+    )
     if form_data.last_frame_data_url and not form_data.first_frame_data_url:
         raise HTTPException(
             status_code=400,
@@ -181,7 +186,7 @@ async def video_generations(
             "aspect_ratio": form_data.aspect_ratio,
             "megapixels": form_data.megapixels,
             "duration": form_data.duration,
-            "seed": seed,
+            "seed": str(seed),
         }
     ]
 

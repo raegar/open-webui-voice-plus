@@ -30,7 +30,7 @@
 		mode: string;
 		duration: number;
 		aspect_ratio: string;
-		seed: number;
+		seed: string | number;
 	};
 
 	const PROMPT_SYSTEM = `You are a prompt-enrichment engine for MiniMax H3, which generates video and synchronized stereo audio. Turn the user's creative direction into one detailed, unambiguous production brief. Preserve the user's intent and output only the brief: no preamble, markdown, JSON, or commentary.
@@ -251,10 +251,10 @@ Write the final MiniMax H3 production brief now.`
 			return;
 		}
 		const seedText = String(seed).trim();
-		const parsedSeed = seedText === '' ? undefined : Number(seedText);
+		const parsedSeed = seedText === '' ? undefined : seedText;
 		if (
 			parsedSeed !== undefined &&
-			(!Number.isSafeInteger(parsedSeed) || parsedSeed < 0 || parsedSeed > Number.MAX_SAFE_INTEGER)
+			(!/^\d+$/.test(parsedSeed) || BigInt(parsedSeed) > 9223372036854775807n)
 		) {
 			toast.error('Seed must be a non-negative whole number.');
 			return;
