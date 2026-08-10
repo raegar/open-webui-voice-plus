@@ -63,13 +63,14 @@ Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep
 	let aspectRatio: AspectRatio = '16:9';
 	let megapixels: Megapixels = 0.2;
 	let duration: Duration = 5;
-	let seed: string | number = '';
+	let seed: string | number | null = '';
 	let firstFrame: FrameAsset | null = null;
 	let lastFrame: FrameAsset | null = null;
 	let drafting = false;
 	let generating = false;
 	let elapsedSeconds = 0;
-	let generatedVideos: GeneratedVideo[] = [];
+	let currentVideo: GeneratedVideo | null = null;
+	let videoHistory: GeneratedVideo[] = [];
 	let firstFileInput: HTMLInputElement;
 	let historyLoading = false;
 	let lastFileInput: HTMLInputElement;
@@ -248,6 +249,14 @@ Write the final MiniMax H3 production brief now.`
 		}
 	};
 
+	const archiveCurrentVideo = () => {
+		const previous = currentVideo;
+		currentVideo = null;
+		if (previous && !videoHistory.some((item) => item.url === previous.url)) {
+			videoHistory = [previous, ...videoHistory];
+		}
+	};
+
 	const generateVideo = async () => {
 		if (!promptApproved || !productionPrompt.trim()) {
 			toast.error('Review and approve the production prompt first.');
@@ -257,7 +266,8 @@ Write the final MiniMax H3 production brief now.`
 			toast.error('Attach the required frame image or images.');
 			return;
 		}
-		const seedText = String(seed).trim();
+		// An empty seed input binds to null, not ''. Treat both as "pick a fresh random seed".
+		const seedText = seed === null || seed === undefined ? '' : String(seed).trim();
 		const parsedSeed = seedText === '' ? undefined : seedText;
 		if (
 			parsedSeed !== undefined &&
@@ -266,6 +276,7 @@ Write the final MiniMax H3 production brief now.`
 			toast.error('Seed must be a non-negative whole number.');
 			return;
 		}
+		archiveCurrentVideo();
 		generating = true;
 		startElapsedTimer();
 		try {
@@ -282,7 +293,7 @@ Write the final MiniMax H3 production brief now.`
 					: {})
 			});
 			if (!result?.[0]?.url) throw new Error('No video was returned.');
-			generatedVideos = [result[0], ...generatedVideos];
+			currentVideo = result[0];
 			seed = String(result[0].seed);
 			toast.success('MiniMax H3 video completed.');
 		} catch (error) {
@@ -296,7 +307,9 @@ Write the final MiniMax H3 production brief now.`
 	const loadVideoHistory = async (showSuccess = false) => {
 		historyLoading = true;
 		try {
-			generatedVideos = await getVideoHistory(localStorage.token, 50);
+			const items: GeneratedVideo[] = await getVideoHistory(localStorage.token, 50);
+			// The video on screen is already stored server-side; keep it out of the history list.
+			videoHistory = currentVideo ? items.filter((item) => item.url !== currentVideo?.url) : items;
 			if (showSuccess) {
 				toast.success('Video history refreshed.');
 			}
@@ -550,66 +563,116 @@ Write the final MiniMax H3 production brief now.`
 					</section>
 
 					<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+						<div class="mb-3 flex items-center justify-between gap-3">
+							<div>
+								<h2 class="font-semibold">Current video</h2>
+								<p class="mt-0.5 text-xs text-gray-500">
+									The latest result. It moves to the history below when the next generation starts.
+								</p>
+							</div>
+							{#if currentVideo}
+								<span class="shrink-0 text-xs text-gray-400"
+									>{formatVideoDate(currentVideo.created_at)}</span
+								>
+							{/if}
+						</div>
+						{#if generating}
+							<p
+								class="rounded-xl bg-gray-50 py-10 text-center text-sm text-gray-500 dark:bg-gray-900"
+							>
+								Rendering with ComfyUI... {elapsedSeconds}s
+							</p>
+						{:else if currentVideo}
+							{@const video = currentVideo}
+							<article
+								class="overflow-hidden rounded-xl border border-gray-200 dark:border-gray-800"
+							>
+								<!-- svelte-ignore a11y-media-has-caption -->
+								<video class="aspect-video w-full bg-black object-contain" src={video.url} controls
+								></video>
+								<div class="flex flex-wrap items-center gap-3 p-3 text-xs text-gray-500">
+									<span>{video.duration}s | {video.aspect_ratio} | seed {video.seed}</span>
+									<div class="ml-auto flex shrink-0 gap-3">
+										<button
+											class="font-medium text-gray-800 hover:underline dark:text-gray-200"
+											on:click={() => reuseVideoPrompt(video)}>Use prompt</button
+										>
+										<button
+											class="font-medium text-gray-800 hover:underline dark:text-gray-200"
+											on:click={() => downloadVideo(video)}>Download</button
+										>
+									</div>
+								</div>
+							</article>
+						{:else}
+							<p
+								class="rounded-xl bg-gray-50 py-10 text-center text-sm text-gray-500 dark:bg-gray-900"
+							>
+								Your next generated video will appear here.
+							</p>
+						{/if}
+					</section>
+
+					<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
 						<div class="flex items-center justify-between gap-3">
 							<div>
 								<h2 class="font-semibold">Video history</h2>
 								<p class="mt-0.5 text-xs text-gray-500">Your 50 most recent generated videos.</p>
 							</div>
 							<button
-								class="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-850"
+								class="shrink-0 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-850"
 								disabled={historyLoading}
 								on:click={() => loadVideoHistory(true)}
 							>
 								{historyLoading ? 'Refreshing...' : 'Refresh'}
 							</button>
 						</div>
-						{#if historyLoading && generatedVideos.length === 0}
+						{#if historyLoading && videoHistory.length === 0}
 							<p
 								class="mt-4 rounded-xl bg-gray-50 py-8 text-center text-sm text-gray-500 dark:bg-gray-900"
 							>
 								Loading video history...
 							</p>
-						{:else if generatedVideos.length === 0}
+						{:else if videoHistory.length === 0}
 							<p
 								class="mt-4 rounded-xl bg-gray-50 py-8 text-center text-sm text-gray-500 dark:bg-gray-900"
 							>
-								Generated videos will appear here.
+								Previously generated videos will appear here.
 							</p>
-						{/if}
-					</section>
-
-					{#if generatedVideos.length > 0}
-						<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
-							<h2 class="mb-3 font-semibold">Generated videos</h2>
-							<div class="grid gap-4 xl:grid-cols-2">
-								{#each generatedVideos as video}
+						{:else}
+							<div class="mt-4 grid gap-4 xl:grid-cols-2">
+								{#each videoHistory as video (video.url)}
 									<article
 										class="overflow-hidden rounded-xl border border-gray-200 dark:border-gray-800"
 									>
+										<!-- svelte-ignore a11y-media-has-caption -->
 										<video
 											class="aspect-video w-full bg-black object-contain"
 											src={video.url}
+											preload="metadata"
 											controls
 										></video>
-										<div class="flex items-center justify-between gap-3 p-3 text-xs text-gray-500">
+										<div
+											class="flex flex-wrap items-center gap-x-3 gap-y-1 p-3 text-xs text-gray-500"
+										>
 											<span>{video.duration}s | {video.aspect_ratio} | seed {video.seed}</span>
+											<span class="text-gray-400">{formatVideoDate(video.created_at)}</span>
 											<div class="ml-auto flex shrink-0 gap-3">
 												<button
 													class="font-medium text-gray-800 hover:underline dark:text-gray-200"
 													on:click={() => reuseVideoPrompt(video)}>Use prompt</button
 												>
-												<span class="text-gray-400">{formatVideoDate(video.created_at)}</span>
+												<button
+													class="font-medium text-gray-800 hover:underline dark:text-gray-200"
+													on:click={() => downloadVideo(video)}>Download</button
+												>
 											</div>
-											<button
-												class="font-medium text-gray-800 hover:underline dark:text-gray-200"
-												on:click={() => downloadVideo(video)}>Download</button
-											>
 										</div>
 									</article>
 								{/each}
 							</div>
-						</section>
-					{/if}
+						{/if}
+					</section>
 				</main>
 
 				<aside
@@ -651,9 +714,19 @@ Write the final MiniMax H3 production brief now.`
 								<option value={10}>10 seconds</option>
 							</select>
 						</label>
-						<label class="block">
-							<span class="mb-1.5 block text-xs font-medium">Seed</span>
+						<div>
+							<div class="mb-1.5 flex items-center justify-between text-xs font-medium">
+								<label for="video-seed">Seed</label>
+								<button
+									class="font-normal text-gray-500 hover:underline disabled:opacity-40"
+									disabled={seed === null || seed === ''}
+									on:click={() => (seed = '')}
+								>
+									Clear for random
+								</button>
+							</div>
 							<input
+								id="video-seed"
 								class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
 								type="number"
 								min="0"
@@ -661,7 +734,10 @@ Write the final MiniMax H3 production brief now.`
 								placeholder="Random"
 								bind:value={seed}
 							/>
-						</label>
+							<p class="mt-1.5 text-xs text-gray-500">
+								Leave this blank to let each generation pick a new random seed.
+							</p>
+						</div>
 					</div>
 					<button
 						class="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"

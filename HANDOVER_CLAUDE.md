@@ -9,7 +9,9 @@ This repository is the deployable custom Open WebUI fork. The current feature se
 - Repository: `C:\\AI\\open-webui-voice-plus`
 - Branch: `scheduled-tasks` (ahead of `origin/scheduled-tasks` by 8 commits at handover)
 - Live UI: `http://127.0.0.1:3000`
-- Live container: `open-webui`, image `open-webui-voice-plus:latest`, port `3000:8080`, restart policy inherited from the existing container, health status healthy.
+- Live container: `open-webui`, image `open-webui-voice-plus:latest`, port `3000:8080`, restart policy `always`, health status healthy.
+- Container mounts: named volume `open-webui` → `/app/backend/data` (user data), and bind `E:/Development/productivity/sweet-mail-biscuits` → `/app/sweetmail`.
+- Storage: the `D:` drive was failing with write errors and the development tree was migrated to `E:`. Stale copies still exist on `D:`, so never point a mount, script, or config at a `D:` path. The repository itself remains on `C:`; there is no `E:\\AI`.
 - ComfyUI/MiniMax-H3: host `http://127.0.0.1:8188`; from Docker use `http://host.docker.internal:8188`.
 - Do not put secrets in this document. The live container has a `WEBUI_SECRET_KEY` and other existing environment values; preserve them by inspecting the current container during deployment.
 
@@ -42,8 +44,10 @@ Flow:
 3. Ask the selected chat model to draft an H3 prompt, edit/review the draft, and explicitly approve it.
 4. Choose aspect ratio (16:9, 9:16, 1:1), quality (0.2 or 0.4 MP), duration (3, 5, or 10 seconds), and seed.
 5. Submit to ComfyUI. Progress/status and errors remain visible during the normal 1–2 minute generation.
-6. The resulting MP4 is playable inline, downloadable, and shown in the current-session gallery.
-7. Previously generated videos are loaded from the persistent history section in the same page.
+6. The resulting MP4 lands in its own **Current video** section, playable inline and downloadable.
+7. A separate **Video history** section below it lists previously generated videos loaded from the backend.
+
+The current video and the history are distinct pieces of state (`currentVideo` and `videoHistory`). When a new generation starts, `archiveCurrentVideo()` moves the on-screen video into the history list, so the Current video section always shows exactly one result — the newest. Refreshing the history filters out the current video by URL, because the backend has already persisted it and it would otherwise appear twice.
 
 Reference-to-Video is intentionally hidden/not implemented. It needs a model that is not installed in the current ComfyUI setup.
 
@@ -77,7 +81,9 @@ GET /api/v1/videos/history?limit=50
 
 `limit` is 1–100. Results come from `Files.get_files_by_user_id(user.id)`, so history is strictly user-scoped even for admins. The backend filters video files whose nested `meta.data` contains a generation prompt, returns newest first, and includes file ID/URL/name/type plus prompt, mode, aspect, megapixels, duration, seed, frame flags, and `created_at`.
 
-The seed is returned as a string. JavaScript-safe random seeds are generated in `[0, 2**53 - 1]`; this avoids regeneration failures such as “Seed must be a non-negative whole number” caused by unsafe or malformed values.
+The seed is returned as a string. JavaScript-safe random seeds are generated in `[0, 2**53 - 1]`; this avoids regeneration failures caused by unsafe or malformed values. Omitting `seed` entirely makes the backend pick a fresh random one.
+
+Svelte’s `bind:value` on `<input type="number">` sets the bound variable to `null`, not `''`, when the field is cleared. The Video Studio seed check must treat `null`/`undefined` and `''` alike as “no seed”; a bare `String(seed).trim()` turns `null` into the literal `"null"` and produces a spurious “Seed must be a non-negative whole number” error instead of a new random seed. The seed box is auto-repopulated with the seed that was used after each generation, so clearing it is the deliberate way to get a new one.
 
 ## ComfyUI assumptions
 
@@ -139,41 +145,79 @@ The authenticated history smoke test should verify that `/api/v1/videos/history`
 
 ## Windows deployment and rollback
 
-Build first, then preserve the current container’s environment and mounts. In particular, `IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE` is a multiline value. Passing every env entry as `--env <literal=value>` can make PowerShell/Docker split that value and accidentally try to pull an image named `detailed:latest`. Pass that variable through the process environment and use `--env IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE`.
+Every code change ends with a rebuild and redeploy; a passing `npm run build` is not the finish line. Build first, then reconstruct the container from the current one’s environment and mounts.
+
+Three things make a naive “preserve everything from `docker inspect`” loop wrong. Read all three before editing the script below.
+
+**Multiline env values.** `IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE` contains newlines. Passing it as `--env <literal=value>` makes PowerShell/Docker split the value and try to pull an image named `detailed:latest`. Pass any multiline value through the process environment and reference it by name only. Detect these by value rather than hardcoding the one known name, so a second multiline variable does not reintroduce the bug.
+
+**Bind sources are VM paths, not host paths.** `docker inspect` reports binds as `/run/desktop/mnt/host/<drive>/...` (the Docker Desktop VM view). Feeding that straight back into `docker run -v` risks creating a fresh empty directory inside the VM instead of re-binding the real host folder. Translate it back to `<DRIVE>:/...` first.
+
+**The `D:` drive is dead.** `D:` was failing with write errors and the development tree was migrated to `E:`. Stale copies remain on `D:`, so a `D:` path can pass `Test-Path` while being abandoned. Any inherited bind still pointing at `D:` must be remapped to its `E:` equivalent, and the deploy must abort if that equivalent is missing. This is the trap that matters most: the old container carried a `D:` bind for `/app/sweetmail`, and faithfully “preserving the mounts” silently recreated it on every deploy. Verify each bind source exists before starting the container.
 
 ```powershell
+$ErrorActionPreference = 'Stop'
 $current = (docker inspect open-webui | ConvertFrom-Json)[0]
 $runArgs = @('run','-d','--name','open-webui','--restart',$current.HostConfig.RestartPolicy.Name,'-p','3000:8080')
+
 foreach ($entry in $current.Config.Env) {
-  if ($entry.StartsWith('IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE=')) {
-    $env:IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE = $entry.Substring($entry.IndexOf('=') + 1)
-    $runArgs += @('--env','IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE')
+  $name  = $entry.Substring(0, $entry.IndexOf('='))
+  $value = $entry.Substring($entry.IndexOf('=') + 1)
+  if ($value -match "`n" -or $value -match "`r") {
+    Set-Item -Path "env:$name" -Value $value
+    $runArgs += @('--env',$name)
   } else {
     $runArgs += @('--env',$entry)
   }
 }
+
 foreach ($mount in $current.Mounts) {
-  if ($mount.Type -eq 'volume') { $source = $mount.Name } else { $source = $mount.Source }
+  if ($mount.Type -eq 'volume') {
+    $runArgs += @('-v',"$($mount.Name):$($mount.Destination)")
+    continue
+  }
+  $source = $mount.Source
+  if ($source -match '^/run/desktop/mnt/host/([a-z])/(.*)$') {
+    $source = "$($Matches[1].ToUpper()):/$($Matches[2])"
+  }
+  if ($source -match '^(?i)D:/(.*)$') {
+    $candidate = "E:/$($Matches[1])"
+    if (-not (Test-Path $candidate)) { throw "Bind $source is on the dead D: drive and $candidate is missing." }
+    $source = $candidate
+  }
+  if (-not (Test-Path $source)) { throw "Bind source $source does not exist." }
   $runArgs += @('-v',"${source}:$($mount.Destination)")
 }
 
 docker stop open-webui
 docker rename open-webui open-webui-rollback
+docker update --restart=no open-webui-rollback
 $newId = docker @runArgs open-webui-voice-plus:latest
-if ($LASTEXITCODE -ne 0) {
+if ($LASTEXITCODE -ne 0 -or -not $newId) {
+  docker rm -f open-webui 2>$null
   docker rename open-webui-rollback open-webui
+  docker update --restart=always open-webui
   docker start open-webui
   throw 'New container failed to start; rollback restored.'
 }
 ```
 
-Wait for health, run the checks above, and keep `open-webui-rollback` until the new container is confirmed healthy and the UI/API are usable. Only then remove it:
+`docker update --restart=no open-webui-rollback` is not optional. The rollback inherits `--restart always`, and Docker restarts `always` containers when the daemon starts back up — a Docker Desktop restart would otherwise race the live container for port 3000.
+
+Wait for health, then run the checks above plus a bind-mount verification, since a broken bind still yields a healthy container:
+
+```powershell
+docker exec open-webui sh -c 'ls /app/sweetmail | wc -l'
+docker exec open-webui sh -c 'echo ok > /app/sweetmail/.write-test && rm /app/sweetmail/.write-test && echo writable'
+```
+
+Keep `open-webui-rollback` until the new container is confirmed healthy and the UI/API are usable. Only then remove it:
 
 ```powershell
 docker rm open-webui-rollback
 ```
 
-Never use `docker rm -v` here: the `open-webui` volume contains user data. If the new container fails, stop/remove only the failed replacement, rename `open-webui-rollback` back to `open-webui`, and start it. Confirm the exact container and mounts with `docker inspect` before any destructive operation.
+Never use `docker rm -v` here: the `open-webui` volume contains user data. Plain `docker rm` never touches a named volume, so replacing a just-created container in place is safe. If the new container fails, stop/remove only the failed replacement, rename `open-webui-rollback` back to `open-webui`, restore its restart policy, and start it. Confirm the exact container and mounts with `docker inspect` before any destructive operation.
 
 ## Known limitations and next work
 
@@ -183,6 +227,8 @@ Never use `docker rm -v` here: the `open-webui` volume contains user data. If th
 - Prompt drafting intentionally sends image metadata, never image bytes, to the selected chat model.
 - Add/expand mocked router tests and a stable authenticated history test if changing metadata or access control.
 - Keep regular chat on the text-only pipeline unless the product requirement explicitly changes.
+- The history list contains adult content beyond the most recent few items. Do not open, render, or inspect history media when working on this page; change the code and let the user verify visually.
+- The generation response has no `id`, so the current video is deduplicated against the refreshed history by `url`. Give the response an `id` if a sturdier key is ever needed.
 
 ## Safe working rules for Claude
 
