@@ -24,12 +24,15 @@ class FakeSession:
     def __init__(self):
         self.calls = []
         self.history_calls = 0
+        self.workflow = None
 
     def request(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
+        if url.endswith("/upload/image"):
+            upload_name = kwargs["files"]["image"][0]
+            return FakeResponse({"name": upload_name})
         if url.endswith("/prompt"):
-            workflow = kwargs["json"]["prompt"]
-            assert "first_frame" not in workflow["105:104"]["inputs"]
+            self.workflow = kwargs["json"]["prompt"]
             return FakeResponse({"prompt_id": "prompt-1"})
         if "/history/" in url:
             self.history_calls += 1
@@ -65,6 +68,17 @@ def test_build_workflow_maps_supported_options():
     assert workflow["105:111"]["inputs"]["value"] == 10.0
     assert workflow["105:15"]["inputs"]["noise_seed"] == 42
     assert "114" not in workflow
+
+
+def test_build_workflow_wires_first_and_last_frames():
+    workflow = build_minimax_h3_workflow(
+        "prompt", "16:9", 0.2, 5, 42, "first.png", "last.png"
+    )
+    inputs = workflow["105:104"]["inputs"]
+    assert workflow["114"]["inputs"]["image"] == "first.png"
+    assert workflow["115"]["inputs"]["image"] == "last.png"
+    assert inputs["first_frame"] == ["114", 0]
+    assert inputs["last_frame"] == ["115", 0]
 
 
 def test_find_video_output_uses_extension_not_bucket_name():
@@ -107,3 +121,34 @@ async def test_client_queues_text_workflow_polls_and_downloads_video():
     assert filename == "MiniMax_H3_00001_.mp4"
     assert content_type == "video/mp4"
     assert session.history_calls == 2
+    assert "first_frame" not in session.workflow["105:104"]["inputs"]
+    assert not any("/upload/image" in call[1] for call in session.calls)
+
+
+@pytest.mark.asyncio
+async def test_client_uploads_and_wires_first_and_last_frames():
+    async def no_sleep(_):
+        return None
+
+    session = FakeSession()
+    client = ComfyUIVideoClient(
+        "http://comfyui:8188",
+        session=session,
+        poll_interval=0,
+        sleep=no_sleep,
+    )
+    await client.generate(
+        "prompt",
+        "16:9",
+        0.2,
+        5,
+        7,
+        (b"first", "first.png", "image/png"),
+        (b"last", "last.png", "image/png"),
+    )
+    inputs = session.workflow["105:104"]["inputs"]
+    assert inputs["first_frame"][0] == "114"
+    assert inputs["last_frame"][0] == "115"
+    uploads = [call for call in session.calls if "/upload/image" in call[1]]
+    assert len(uploads) == 2
+    assert uploads[0][2]["files"]["image"][2] == "image/png"

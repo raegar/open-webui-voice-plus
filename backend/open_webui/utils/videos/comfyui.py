@@ -1,6 +1,7 @@
 import asyncio
+import mimetypes
 import time
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Awaitable, Callable, Optional
 from urllib.parse import urlencode
 from uuid import uuid4
@@ -28,6 +29,8 @@ def build_minimax_h3_workflow(
     megapixels: float,
     duration: int,
     seed: int,
+    first_frame_name: Optional[str] = None,
+    last_frame_name: Optional[str] = None,
 ) -> dict:
     try:
         width, height = RESOLUTIONS[(aspect_ratio, megapixels)]
@@ -156,6 +159,22 @@ def build_minimax_h3_workflow(
         },
     }
 
+    if first_frame_name:
+        workflow["114"] = {
+            "inputs": {"image": first_frame_name},
+            "class_type": "LoadImage",
+            "_meta": {"title": "Load First Frame"},
+        }
+        workflow["105:104"]["inputs"]["first_frame"] = ["114", 0]
+
+    if last_frame_name:
+        workflow["115"] = {
+            "inputs": {"image": last_frame_name},
+            "class_type": "LoadImage",
+            "_meta": {"title": "Load Last Frame"},
+        }
+        workflow["105:104"]["inputs"]["last_frame"] = ["115", 0]
+
     return workflow
 
 
@@ -213,6 +232,23 @@ class ComfyUIVideoClient:
             **kwargs,
         )
 
+    async def upload_image(
+        self, image_data: bytes, filename: str, content_type: str
+    ) -> str:
+        safe_name = Path(filename).name
+        upload_name = f"owui-video-{uuid4().hex}-{safe_name}"
+        response = await self._request(
+            "POST",
+            "/upload/image",
+            files={"image": (upload_name, image_data, content_type)},
+            data={"type": "input", "overwrite": "false"},
+        )
+        response.raise_for_status()
+        name = response.json().get("name")
+        if not name:
+            raise ComfyUIVideoError("ComfyUI did not return an uploaded image name")
+        return name
+
     async def generate(
         self,
         prompt: str,
@@ -220,13 +256,19 @@ class ComfyUIVideoClient:
         megapixels: float,
         duration: int,
         seed: int,
+        first_frame: Optional[tuple[bytes, str, str]] = None,
+        last_frame: Optional[tuple[bytes, str, str]] = None,
     ) -> tuple[bytes, str, str]:
+        first_frame_name = await self.upload_image(*first_frame) if first_frame else None
+        last_frame_name = await self.upload_image(*last_frame) if last_frame else None
         workflow = build_minimax_h3_workflow(
             prompt,
             aspect_ratio,
             megapixels,
             duration,
             seed,
+            first_frame_name,
+            last_frame_name,
         )
         response = await self._request(
             "POST",

@@ -64,6 +64,7 @@
 	import Sidebar from '../icons/Sidebar.svelte';
 	import PinnedModelList from './Sidebar/PinnedModelList.svelte';
 	import Note from '../icons/Note.svelte';
+	import VideoCamera from '../icons/VideoCamera.svelte';
 	import { slide } from 'svelte/transition';
 	import HotkeyHint from '../common/HotkeyHint.svelte';
 
@@ -759,6 +760,29 @@
 					</Tooltip>
 				</div>
 
+				{#if $config?.features?.enable_video_generation && ($user?.role === 'admin' || $user?.permissions?.features?.image_generation)}
+					<div>
+						<Tooltip content="Video Studio" placement="right">
+							<a
+								class="cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
+								href="/video"
+								on:click={async (e) => {
+									e.stopImmediatePropagation();
+									e.preventDefault();
+									goto('/video');
+									itemClickHandler();
+								}}
+								draggable="false"
+								aria-label="Video Studio"
+							>
+								<div class="self-center flex items-center justify-center size-9">
+									<VideoCamera className="size-4.5" />
+								</div>
+							</a>
+						</Tooltip>
+					</div>
+				{/if}
+
 				{#if ($config?.features?.enable_notes ?? false) && ($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true))}
 					<div class="">
 						<Tooltip content={$i18n.t('Notes')} placement="right">
@@ -992,6 +1016,26 @@
 							<HotkeyHint name="search" className=" group-hover:visible invisible" />
 						</button>
 					</div>
+
+					{#if $config?.features?.enable_video_generation && ($user?.role === 'admin' || $user?.permissions?.features?.image_generation)}
+						<div class="px-[0.4375rem] flex justify-center text-gray-800 dark:text-gray-200">
+							<a
+								id="sidebar-video-studio-button"
+								class="grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
+								href="/video"
+								on:click={itemClickHandler}
+								draggable="false"
+								aria-label="Video Studio"
+							>
+								<div class="self-center">
+									<VideoCamera className="size-4.5" strokeWidth="2" />
+								</div>
+								<div class="flex self-center translate-y-[0.5px]">
+									<div class="self-center text-sm font-primary">Video Studio</div>
+								</div>
+							</a>
+						</div>
+					{/if}
 
 					{#if ($config?.features?.enable_notes ?? false) && ($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true))}
 						<div class="px-[0.4375rem] flex justify-center text-gray-800 dark:text-gray-200">

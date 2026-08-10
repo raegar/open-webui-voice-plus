@@ -1,3 +1,6 @@
+import base64
+import binascii
+import mimetypes
 import io
 import random
 from typing import Literal, Optional
@@ -19,6 +22,8 @@ router = APIRouter()
 class CreateVideoForm(BaseModel):
     prompt: str
     mode: Literal["text"] = "text"
+    first_frame_data_url: Optional[str] = Field(default=None, max_length=36_000_000)
+    last_frame_data_url: Optional[str] = Field(default=None, max_length=36_000_000)
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
     megapixels: Literal[0.2, 0.4] = 0.2
     duration: Literal[3, 5, 10] = 3
@@ -63,6 +68,32 @@ def _resolve_regeneration_prompt(form_data: CreateVideoForm, user) -> Optional[s
     return _get_text_content(message.get("content")) or None
 
 
+def _load_frame_data_url(value: str, role: str) -> tuple[bytes, str, str]:
+    try:
+        header, encoded = value.split(",", 1)
+        content_type = header.removeprefix("data:").split(";", 1)[0].lower()
+        if not header.endswith(";base64") or content_type not in {
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+        }:
+            raise ValueError
+        image_data = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{role} must be a base64 PNG, JPEG, or WebP image",
+        ) from exc
+
+    if not image_data or len(image_data) > 25 * 1024 * 1024:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{role} must be no larger than 25 MB",
+        )
+    extension = mimetypes.guess_extension(content_type) or ".png"
+    return image_data, f"{role.lower().replace(' ', '-')}{extension}", content_type
+
+
 def _upload_video(request, video_data, filename, content_type, metadata, user):
     file = UploadFile(
         file=io.BytesIO(video_data),
@@ -94,6 +125,21 @@ async def video_generations(
 ):
     metadata = metadata or {}
     seed = form_data.seed if form_data.seed is not None else random.randrange(2**63)
+    if form_data.last_frame_data_url and not form_data.first_frame_data_url:
+        raise HTTPException(
+            status_code=400,
+            detail="A last frame requires a first frame",
+        )
+    first_frame = (
+        _load_frame_data_url(form_data.first_frame_data_url, "First frame")
+        if form_data.first_frame_data_url
+        else None
+    )
+    last_frame = (
+        _load_frame_data_url(form_data.last_frame_data_url, "Last frame")
+        if form_data.last_frame_data_url
+        else None
+    )
     client = ComfyUIVideoClient(
         request.app.state.config.COMFYUI_VIDEO_BASE_URL,
         request.app.state.config.COMFYUI_VIDEO_API_KEY,
@@ -105,12 +151,18 @@ async def video_generations(
         form_data.megapixels,
         form_data.duration,
         seed,
+        first_frame,
+        last_frame,
     )
     generation_metadata = {
-        **form_data.model_dump(exclude_none=True),
+        **form_data.model_dump(
+            exclude={"first_frame_data_url", "last_frame_data_url"}, exclude_none=True
+        ),
         **metadata,
         "seed": seed,
         "content_type": content_type,
+        "has_first_frame": first_frame is not None,
+        "has_last_frame": last_frame is not None,
     }
     _, url = _upload_video(
         request,
@@ -125,7 +177,7 @@ async def video_generations(
             "url": url,
             "content_type": content_type,
             "prompt": form_data.prompt,
-            "mode": form_data.mode,
+            "mode": "first-last" if last_frame else "image" if first_frame else "text",
             "aspect_ratio": form_data.aspect_ratio,
             "megapixels": form_data.megapixels,
             "duration": form_data.duration,
