@@ -1,11 +1,9 @@
 import { VIDEOS_API_BASE_URL } from '$lib/constants';
 
 export type VideoGenerationOptions = {
-	mode: 'text' | 'image';
 	aspect_ratio: '16:9' | '9:16' | '1:1';
 	megapixels: 0.2 | 0.4;
-	duration: 3 | 5;
-	source_image_url?: string;
+	duration: 3 | 5 | 10;
 };
 
 export const videoGenerations = async (

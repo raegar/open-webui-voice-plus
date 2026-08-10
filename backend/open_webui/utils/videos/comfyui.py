@@ -1,6 +1,4 @@
 import asyncio
-import copy
-import mimetypes
 import time
 from pathlib import PurePosixPath
 from typing import Awaitable, Callable, Optional
@@ -30,7 +28,6 @@ def build_minimax_h3_workflow(
     megapixels: float,
     duration: int,
     seed: int,
-    source_image_name: Optional[str] = None,
 ) -> dict:
     try:
         width, height = RESOLUTIONS[(aspect_ratio, megapixels)]
@@ -159,15 +156,7 @@ def build_minimax_h3_workflow(
         },
     }
 
-    if source_image_name:
-        workflow["114"] = {
-            "inputs": {"image": source_image_name},
-            "class_type": "LoadImage",
-            "_meta": {"title": "Load Image"},
-        }
-        workflow["105:104"]["inputs"]["first_frame"] = ["114", 0]
-
-    return copy.deepcopy(workflow)
+    return workflow
 
 
 def find_video_output(history_entry: dict) -> Optional[dict]:
@@ -224,20 +213,6 @@ class ComfyUIVideoClient:
             **kwargs,
         )
 
-    async def upload_image(self, image_data: bytes, filename: str, content_type: str) -> str:
-        response = await self._request(
-            "POST",
-            "/upload/image",
-            files={"image": (filename, image_data, content_type)},
-            data={"type": "input", "overwrite": "true"},
-        )
-        response.raise_for_status()
-        data = response.json()
-        name = data.get("name")
-        if not name:
-            raise ComfyUIVideoError("ComfyUI did not return an uploaded image name")
-        return name
-
     async def generate(
         self,
         prompt: str,
@@ -245,19 +220,13 @@ class ComfyUIVideoClient:
         megapixels: float,
         duration: int,
         seed: int,
-        source_image: Optional[tuple[bytes, str, str]] = None,
     ) -> tuple[bytes, str, str]:
-        source_image_name = None
-        if source_image:
-            source_image_name = await self.upload_image(*source_image)
-
         workflow = build_minimax_h3_workflow(
             prompt,
             aspect_ratio,
             megapixels,
             duration,
             seed,
-            source_image_name,
         )
         response = await self._request(
             "POST",

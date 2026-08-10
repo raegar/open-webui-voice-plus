@@ -1,20 +1,13 @@
-import base64
 import io
-import mimetypes
 import random
-import re
-from pathlib import Path
 from typing import Literal, Optional
 
-import requests
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.models.chats import Chats
-from open_webui.models.files import Files
 from open_webui.routers.files import upload_file_handler
-from open_webui.storage.provider import Storage
 from open_webui.utils.access_control import has_permission
 from open_webui.utils.auth import get_verified_user
 from open_webui.utils.videos.comfyui import ComfyUIVideoClient
@@ -25,12 +18,11 @@ router = APIRouter()
 
 class CreateVideoForm(BaseModel):
     prompt: str
-    mode: Literal["text", "image"] = "text"
+    mode: Literal["text"] = "text"
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
     megapixels: Literal[0.2, 0.4] = 0.2
-    duration: Literal[3, 5] = 3
+    duration: Literal[3, 5, 10] = 3
     seed: Optional[int] = Field(default=None, ge=0, le=2**63 - 1)
-    source_image_url: Optional[str] = None
     chat_id: Optional[str] = None
     message_id: Optional[str] = None
 
@@ -71,38 +63,6 @@ def _resolve_regeneration_prompt(form_data: CreateVideoForm, user) -> Optional[s
     return _get_text_content(message.get("content")) or None
 
 
-def _load_source_image(url: str, user) -> tuple[bytes, str, str]:
-    if url.startswith("data:image/"):
-        header, encoded = url.split(",", 1)
-        content_type = header.split(";", 1)[0].removeprefix("data:")
-        extension = mimetypes.guess_extension(content_type) or ".png"
-        return base64.b64decode(encoded), f"source{extension}", content_type
-
-    file_match = re.search(r"/api/v1/files/([^/]+)/content(?:/|$)", url)
-    if file_match:
-        file_item = Files.get_file_by_id_and_user_id(file_match.group(1), user.id)
-        if not file_item and user.role == "admin":
-            file_item = Files.get_file_by_id(file_match.group(1))
-        if not file_item:
-            raise HTTPException(status_code=404, detail="Source image was not found")
-        file_path = Path(Storage.get_file(file_item.path))
-        content_type = file_item.meta.get("content_type") or mimetypes.guess_type(
-            file_item.filename
-        )[0] or "image/png"
-        return file_path.read_bytes(), file_item.filename, content_type
-
-    if url.startswith(("http://", "https://")):
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-        content_type = response.headers.get("content-type", "image/png").split(";", 1)[0]
-        if not content_type.startswith("image/"):
-            raise HTTPException(status_code=400, detail="Source URL is not an image")
-        extension = mimetypes.guess_extension(content_type) or ".png"
-        return response.content, f"source{extension}", content_type
-
-    raise HTTPException(status_code=400, detail="Unsupported source image URL")
-
-
 def _upload_video(request, video_data, filename, content_type, metadata, user):
     file = UploadFile(
         file=io.BytesIO(video_data),
@@ -134,15 +94,6 @@ async def video_generations(
 ):
     metadata = metadata or {}
     seed = form_data.seed if form_data.seed is not None else random.randrange(2**63)
-    source_image = None
-    if form_data.mode == "image":
-        if not form_data.source_image_url:
-            raise HTTPException(
-                status_code=400,
-                detail="Image-to-video requires an attached source image",
-            )
-        source_image = _load_source_image(form_data.source_image_url, user)
-
     client = ComfyUIVideoClient(
         request.app.state.config.COMFYUI_VIDEO_BASE_URL,
         request.app.state.config.COMFYUI_VIDEO_API_KEY,
@@ -154,7 +105,6 @@ async def video_generations(
         form_data.megapixels,
         form_data.duration,
         seed,
-        source_image,
     )
     generation_metadata = {
         **form_data.model_dump(exclude_none=True),

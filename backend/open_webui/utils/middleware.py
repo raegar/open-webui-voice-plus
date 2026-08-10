@@ -1773,23 +1773,14 @@ async def chat_video_generation_handler(
 
     features = metadata.get("features", {})
     options = features.get("video_generation_options", {})
-    mode = options.get("mode", "text")
-    source_image_url = None
-    if mode == "image":
-        message_images = get_images_from_messages(message_list)
-        if message_images and message_images[0]:
-            source_image_url = message_images[0][0]
-
     try:
         videos = await video_generations(
             request=request,
             form_data=CreateVideoForm(
                 prompt=prompt,
-                mode=mode,
                 aspect_ratio=options.get("aspect_ratio", "16:9"),
                 megapixels=options.get("megapixels", 0.2),
                 duration=options.get("duration", 3),
-                source_image_url=source_image_url,
             ),
             metadata={
                 "chat_id": chat_id,
@@ -1814,16 +1805,10 @@ async def chat_video_generation_handler(
                             "url": video["url"],
                             "content_type": video["content_type"],
                             "prompt": prompt,
-                            "mode": video["mode"],
                             "aspect_ratio": video["aspect_ratio"],
                             "megapixels": video["megapixels"],
                             "duration": video["duration"],
                             "seed": video["seed"],
-                            **(
-                                {"source_image_url": source_image_url}
-                                if source_image_url
-                                else {}
-                            ),
                         }
                         for video in videos
                     ]

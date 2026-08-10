@@ -27,11 +27,9 @@ class FakeSession:
 
     def request(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
-        if url.endswith("/upload/image"):
-            return FakeResponse({"name": "source.png"})
         if url.endswith("/prompt"):
             workflow = kwargs["json"]["prompt"]
-            assert workflow["105:104"]["inputs"]["first_frame"] == ["114", 0]
+            assert "first_frame" not in workflow["105:104"]["inputs"]
             return FakeResponse({"prompt_id": "prompt-1"})
         if "/history/" in url:
             self.history_calls += 1
@@ -61,10 +59,10 @@ class FakeSession:
 
 
 def test_build_workflow_maps_supported_options():
-    workflow = build_minimax_h3_workflow("prompt", "9:16", 0.4, 5, 42)
+    workflow = build_minimax_h3_workflow("prompt", "9:16", 0.4, 10, 42)
     inputs = workflow["105:104"]["inputs"]
     assert (inputs["width"], inputs["height"]) == (480, 864)
-    assert workflow["105:111"]["inputs"]["value"] == 5.0
+    assert workflow["105:111"]["inputs"]["value"] == 10.0
     assert workflow["105:15"]["inputs"]["noise_seed"] == 42
     assert "114" not in workflow
 
@@ -87,7 +85,7 @@ def test_find_video_output_uses_extension_not_bucket_name():
 
 
 @pytest.mark.asyncio
-async def test_client_uploads_image_polls_and_downloads_video():
+async def test_client_queues_text_workflow_polls_and_downloads_video():
     async def no_sleep(_):
         return None
 
@@ -104,7 +102,6 @@ async def test_client_uploads_image_polls_and_downloads_video():
         0.2,
         3,
         7,
-        (b"image", "source.png", "image/png"),
     )
     assert data == b"video"
     assert filename == "MiniMax_H3_00001_.mp4"

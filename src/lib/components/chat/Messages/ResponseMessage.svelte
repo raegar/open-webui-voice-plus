@@ -79,12 +79,10 @@
 			content_type?: string;
 			name?: string;
 			size?: number;
-			mode?: 'text' | 'image';
 			aspect_ratio?: '16:9' | '9:16' | '1:1';
 			megapixels?: 0.2 | 0.4;
-			duration?: 3 | 5;
+			duration?: 3 | 5 | 10;
 			seed?: number;
-			source_image_url?: string;
 		}[];
 		timestamp: number;
 		role: string;
@@ -270,13 +268,9 @@
 				localStorage.token,
 				prompt,
 				{
-					mode: storedVideo.mode ?? 'text',
 					aspect_ratio: storedVideo.aspect_ratio ?? '16:9',
 					megapixels: storedVideo.megapixels ?? 0.2,
-					duration: storedVideo.duration ?? 3,
-					...(storedVideo.source_image_url
-						? { source_image_url: storedVideo.source_image_url }
-						: {})
+					duration: storedVideo.duration ?? 3
 				},
 				chatId,
 				messageId
@@ -287,10 +281,7 @@
 					...videos.map((video: any) => ({
 						type: 'video',
 						...video,
-						prompt,
-						...(storedVideo.source_image_url
-							? { source_image_url: storedVideo.source_image_url }
-							: {})
+						prompt
 					}))
 				];
 				await saveMessage(messageId, {

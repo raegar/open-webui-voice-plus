@@ -151,10 +151,9 @@
 	let imageGenerationEnabled = false;
 	let imageGenerationModel = '';
 	let videoGenerationEnabled = false;
-	let videoGenerationMode: 'text' | 'image' = 'text';
 	let videoGenerationAspectRatio: '16:9' | '9:16' | '1:1' = '16:9';
 	let videoGenerationMegapixels: 0.2 | 0.4 = 0.2;
-	let videoGenerationDuration: 3 | 5 = 3;
+	let videoGenerationDuration: 3 | 5 | 10 = 3;
 	let webSearchEnabled = false;
 	let codeInterpreterEnabled = false;
 
@@ -206,7 +205,6 @@
 		imageGenerationEnabled = false;
 		imageGenerationModel = '';
 		videoGenerationEnabled = false;
-		videoGenerationMode = 'text';
 		videoGenerationAspectRatio = '16:9';
 		videoGenerationMegapixels = 0.2;
 		videoGenerationDuration = 3;
@@ -259,7 +257,6 @@
 						imageGenerationEnabled = input.imageGenerationEnabled;
 						imageGenerationModel = input.imageGenerationModel ?? '';
 						videoGenerationEnabled = input.videoGenerationEnabled ?? false;
-						videoGenerationMode = input.videoGenerationMode ?? 'text';
 						videoGenerationAspectRatio = input.videoGenerationAspectRatio ?? '16:9';
 						videoGenerationMegapixels = input.videoGenerationMegapixels ?? 0.2;
 						videoGenerationDuration = input.videoGenerationDuration ?? 3;
@@ -325,7 +322,6 @@
 		imageGenerationEnabled = false;
 		imageGenerationModel = '';
 		videoGenerationEnabled = false;
-		videoGenerationMode = 'text';
 		videoGenerationAspectRatio = '16:9';
 		videoGenerationMegapixels = 0.2;
 		videoGenerationDuration = 3;
@@ -760,7 +756,6 @@
 				imageGenerationModel = '';
 				codeInterpreterEnabled = false;
 				videoGenerationEnabled = false;
-				videoGenerationMode = 'text';
 				videoGenerationAspectRatio = '16:9';
 				videoGenerationMegapixels = 0.2;
 				videoGenerationDuration = 3;
@@ -778,7 +773,6 @@
 						imageGenerationModel = input.imageGenerationModel ?? '';
 						codeInterpreterEnabled = input.codeInterpreterEnabled;
 						videoGenerationEnabled = input.videoGenerationEnabled ?? false;
-						videoGenerationMode = input.videoGenerationMode ?? 'text';
 						videoGenerationAspectRatio = input.videoGenerationAspectRatio ?? '16:9';
 						videoGenerationMegapixels = input.videoGenerationMegapixels ?? 0.2;
 						videoGenerationDuration = input.videoGenerationDuration ?? 3;
@@ -1797,17 +1791,6 @@
 			return;
 		}
 		if (
-			videoGenerationEnabled &&
-			videoGenerationMode === 'image' &&
-			!files.some(
-				(file) => file.type === 'image' || (file?.content_type ?? '').startsWith('image/')
-			)
-		) {
-			toast.error($i18n.t('Image-to-video requires an attached image'));
-			return;
-		}
-
-		if (
 			files.length > 0 &&
 			files.filter((file) => file.type !== 'image' && file.status === 'uploading').length > 0
 		) {
@@ -2009,8 +1992,7 @@
 					if (
 						hasImages &&
 						!(model.info?.meta?.capabilities?.vision ?? true) &&
-						!imageGenerationEnabled &&
-						!videoGenerationEnabled
+						!imageGenerationEnabled
 					) {
 						toast.error(
 							$i18n.t('Model {{modelName}} is not vision capable', {
@@ -2063,7 +2045,6 @@
 						? videoGenerationEnabled
 						: false,
 				video_generation_options: {
-					mode: videoGenerationMode,
 					aspect_ratio: videoGenerationAspectRatio,
 					megapixels: videoGenerationMegapixels,
 					duration: videoGenerationDuration
@@ -2901,7 +2882,6 @@
 									bind:atSelectedModel
 									bind:showCommands
 									bind:videoGenerationEnabled
-									bind:videoGenerationMode
 									bind:videoGenerationAspectRatio
 									bind:videoGenerationMegapixels
 									bind:videoGenerationDuration
@@ -2978,7 +2958,6 @@
 									bind:atSelectedModel
 									bind:showCommands
 									bind:videoGenerationEnabled
-									bind:videoGenerationMode
 									bind:videoGenerationAspectRatio
 									bind:videoGenerationMegapixels
 									bind:videoGenerationDuration

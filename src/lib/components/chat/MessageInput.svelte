@@ -133,10 +133,9 @@
 	export let imageGenerationEnabled = false;
 	export let imageGenerationModel = '';
 	export let videoGenerationEnabled = false;
-	export let videoGenerationMode: 'text' | 'image' = 'text';
 	export let videoGenerationAspectRatio: '16:9' | '9:16' | '1:1' = '16:9';
 	export let videoGenerationMegapixels: 0.2 | 0.4 = 0.2;
-	export let videoGenerationDuration: 3 | 5 = 3;
+	export let videoGenerationDuration: 3 | 5 | 10 = 3;
 
 	$: if (videoGenerationEnabled && imageGenerationEnabled) imageGenerationEnabled = false;
 
@@ -197,7 +196,6 @@
 		imageGenerationModel,
 		webSearchEnabled,
 		videoGenerationEnabled,
-		videoGenerationMode,
 		videoGenerationAspectRatio,
 		videoGenerationMegapixels,
 		videoGenerationDuration,
@@ -1816,14 +1814,6 @@
 													</button>
 												</Tooltip>
 												<select
-													bind:value={videoGenerationMode}
-													aria-label={$i18n.t('Video mode')}
-													class="text-xs rounded-full px-2 py-1 border border-violet-200/40 dark:border-violet-500/20 bg-violet-50 dark:bg-violet-400/10 text-violet-600 dark:text-violet-300 focus:outline-none"
-												>
-													<option value="text">Text</option>
-													<option value="image">Image</option>
-												</select>
-												<select
 													bind:value={videoGenerationAspectRatio}
 													aria-label={$i18n.t('Aspect ratio')}
 													class="text-xs rounded-full px-2 py-1 border border-violet-200/40 dark:border-violet-500/20 bg-violet-50 dark:bg-violet-400/10 text-violet-600 dark:text-violet-300 focus:outline-none"
@@ -1843,7 +1833,9 @@
 													aria-label={$i18n.t('Video duration')}
 													class="text-xs rounded-full px-2 py-1 border border-violet-200/40 dark:border-violet-500/20 bg-violet-50 dark:bg-violet-400/10 text-violet-600 dark:text-violet-300 focus:outline-none"
 												>
-													<option value={3}>3s</option><option value={5}>5s</option>
+													<option value={3}>3s</option><option value={5}>5s</option><option
+														value={10}>10s</option
+													>
 												</select>
 											</div>
 										{/if}
