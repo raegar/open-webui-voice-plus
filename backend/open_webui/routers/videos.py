@@ -1,9 +1,13 @@
+import asyncio
 import base64
 import binascii
-import mimetypes
 import io
+import logging
+import mimetypes
 import random
+import time
 from typing import Literal, Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
@@ -18,7 +22,10 @@ from open_webui.utils.videos.comfyui import ComfyUIVideoClient
 
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 NUMBER_SAFE_INTEGER_MAX = 2**53 - 1
+VIDEO_GENERATION_JOBS: dict[str, dict] = {}
+VIDEO_GENERATION_TASKS: set[asyncio.Task] = set()
 
 
 class CreateVideoForm(BaseModel):
@@ -33,6 +40,10 @@ class CreateVideoForm(BaseModel):
     seed: Optional[int] = Field(default=None, ge=0, le=2**63 - 1)
     chat_id: Optional[str] = None
     message_id: Optional[str] = None
+
+
+class CreateVideoJobForm(CreateVideoForm):
+    job_id: UUID
 
 
 def _get_text_content(content) -> str:
@@ -171,18 +182,22 @@ def _get_video_history_items(request: Request, user, limit: int) -> list[dict]:
     return items
 
 
-@router.get("/history")
-async def get_video_history(
-    request: Request,
-    limit: int = Query(default=50, ge=1, le=100),
-    user=Depends(get_verified_user),
-):
+def _check_video_access(request: Request, user) -> None:
     if not request.app.state.config.ENABLE_VIDEO_GENERATION:
         raise HTTPException(status_code=403, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
     if user.role != "admin" and not has_permission(
         user.id, "features.image_generation", request.app.state.config.USER_PERMISSIONS
     ):
         raise HTTPException(status_code=403, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
+
+
+@router.get("/history")
+async def get_video_history(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=100),
+    user=Depends(get_verified_user),
+):
+    _check_video_access(request, user)
     return _get_video_history_items(request, user, limit)
 
 
@@ -293,19 +308,111 @@ async def video_generations(
     ]
 
 
+def _public_video_job(job_id: str, job: dict) -> dict:
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "created_at": job["created_at"],
+        "updated_at": job["updated_at"],
+        "result": job.get("result"),
+        "error": job.get("error"),
+    }
+
+
+def _prune_video_jobs() -> None:
+    cutoff = time.time() - 24 * 60 * 60
+    stale = [
+        job_id
+        for job_id, job in VIDEO_GENERATION_JOBS.items()
+        if job["status"] in {"completed", "failed"} and job["updated_at"] < cutoff
+    ]
+    for job_id in stale:
+        VIDEO_GENERATION_JOBS.pop(job_id, None)
+
+
+async def _run_video_generation_job(
+    request: Request,
+    job_id: str,
+    form_data: CreateVideoForm,
+    user,
+) -> None:
+    job = VIDEO_GENERATION_JOBS[job_id]
+    job["status"] = "running"
+    job["updated_at"] = time.time()
+    try:
+        regeneration_prompt = _resolve_regeneration_prompt(form_data, user)
+        if regeneration_prompt:
+            form_data.prompt = regeneration_prompt
+        job["result"] = await video_generations(request, form_data, user=user)
+        job["status"] = "completed"
+    except Exception as exc:
+        log.exception("Video generation job %s failed", job_id)
+        job["status"] = "failed"
+        job["error"] = (
+            str(exc.detail)
+            if isinstance(exc, HTTPException)
+            else str(exc) or "Video generation failed"
+        )
+    finally:
+        job["updated_at"] = time.time()
+
+
+@router.post("/generations/jobs")
+async def create_video_generation_job(
+    request: Request,
+    form_data: CreateVideoJobForm,
+    user=Depends(get_verified_user),
+):
+    _check_video_access(request, user)
+    _prune_video_jobs()
+    job_id = str(form_data.job_id)
+    existing = VIDEO_GENERATION_JOBS.get(job_id)
+    if existing:
+        if existing["user_id"] != user.id:
+            raise HTTPException(status_code=404, detail="Video generation job not found")
+        return _public_video_job(job_id, existing)
+
+    now = time.time()
+    VIDEO_GENERATION_JOBS[job_id] = {
+        "user_id": user.id,
+        "status": "queued",
+        "created_at": now,
+        "updated_at": now,
+        "result": None,
+        "error": None,
+    }
+    generation_form = CreateVideoForm.model_validate(
+        form_data.model_dump(exclude={"job_id"})
+    )
+    task = asyncio.create_task(
+        _run_video_generation_job(request, job_id, generation_form, user)
+    )
+    VIDEO_GENERATION_TASKS.add(task)
+    task.add_done_callback(VIDEO_GENERATION_TASKS.discard)
+    return _public_video_job(job_id, VIDEO_GENERATION_JOBS[job_id])
+
+
+@router.get("/generations/jobs/{job_id}")
+async def get_video_generation_job(
+    request: Request,
+    job_id: UUID,
+    user=Depends(get_verified_user),
+):
+    _check_video_access(request, user)
+    key = str(job_id)
+    job = VIDEO_GENERATION_JOBS.get(key)
+    if not job or job["user_id"] != user.id:
+        raise HTTPException(status_code=404, detail="Video generation job not found")
+    return _public_video_job(key, job)
+
+
 @router.post("/generations")
 async def generate_videos(
     request: Request,
     form_data: CreateVideoForm,
     user=Depends(get_verified_user),
 ):
-    if not request.app.state.config.ENABLE_VIDEO_GENERATION:
-        raise HTTPException(status_code=403, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
-    if user.role != "admin" and not has_permission(
-        user.id, "features.image_generation", request.app.state.config.USER_PERMISSIONS
-    ):
-        raise HTTPException(status_code=403, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
-
+    _check_video_access(request, user)
     regeneration_prompt = _resolve_regeneration_prompt(form_data, user)
     if regeneration_prompt:
         form_data.prompt = regeneration_prompt

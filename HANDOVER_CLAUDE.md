@@ -83,6 +83,15 @@ Form fields include `prompt`, `mode` (`text`, `image`, or `first-last`), `aspect
 
 Image data URLs are validated as PNG/JPEG/WebP and capped at 25 MB. A last frame requires a first frame. Raw data URLs are never written to generation metadata. Stored metadata includes prompt, mode, dimensions/settings, seed, frame-presence flags, and ownership.
 
+Browser-facing generation uses resumable background jobs:
+
+```text
+POST /api/v1/videos/generations/jobs
+GET  /api/v1/videos/generations/jobs/{job_id}
+```
+
+The browser creates and persists a UUID before submission. Submitting the same UUID again is idempotent for its owner, status is strictly user-scoped, and Video Studio resumes polling after sleep, reload, or a temporary network failure. Completed and failed in-memory job records are pruned after 24 hours; the generated MP4 remains in normal OWUI file storage/history. The deployment currently runs one Uvicorn worker, which is required by this in-memory registry. Move jobs to shared database/Redis storage before adding multiple workers or replicas.
+
 History:
 
 ```text
@@ -227,6 +236,7 @@ Never use `docker rm -v` here: the `open-webui` volume contains user data. Plain
 ## Known limitations and next work
 
 - Reference mode currently supports images only. The underlying node also supports reference video and audio, but those upload and loader paths are not exposed in Video Studio yet.
+- Active job status survives browser suspension but not an OWUI container restart; completed MP4s remain persistent. A durable database/Redis job table would remove this limitation.
 - History currently returns the newest 50 items by default and has no delete/management UI.
 - Uploaded source frames are used by the workflow but are not persisted as OWUI files for later re-editing.
 - Prompt drafting intentionally sends image metadata, never image bytes, to the selected chat model.

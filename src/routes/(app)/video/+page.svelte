@@ -4,7 +4,12 @@
 	import { toast } from 'svelte-sonner';
 
 	import { generateOpenAIChatCompletion } from '$lib/apis/openai';
-	import { getVideoHistory, videoGenerations } from '$lib/apis/videos';
+	import {
+		getVideoGenerationJob,
+		getVideoHistory,
+		startVideoGenerationJob,
+		type VideoGenerationOptions
+	} from '$lib/apis/videos';
 	import Selector from '$lib/components/chat/ModelSelector/Selector.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Sidebar from '$lib/components/icons/Sidebar.svelte';
@@ -81,6 +86,8 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	let referenceImages: FrameAsset[] = [];
 	let drafting = false;
 	let generating = false;
+	let generationPolling = false;
+	let destroyed = false;
 	let elapsedSeconds = 0;
 	let currentVideo: GeneratedVideo | null = null;
 	let videoHistory: GeneratedVideo[] = [];
@@ -432,6 +439,60 @@ Write the final MiniMax H3 production brief now.`
 		}
 	};
 
+	const activeJobStorageKey = () => `owui-video-generation-job:${$user?.id ?? 'default'}`;
+	const wait = (milliseconds: number) =>
+		new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+	const pollVideoGenerationJob = async (jobId: string, resumed = false) => {
+		if (generationPolling) return;
+		generationPolling = true;
+		generating = true;
+		if (!elapsedTimer) startElapsedTimer();
+		if (resumed) toast.info('Reconnected to the video generation job.');
+		try {
+			while (!destroyed) {
+				try {
+					const job = await getVideoGenerationJob(localStorage.token, jobId);
+					elapsedSeconds = Math.max(
+						elapsedSeconds,
+						Math.max(0, Math.floor(Date.now() / 1000 - job.created_at))
+					);
+					if (job.status === 'completed') {
+						const result = job.result?.[0] as GeneratedVideo | undefined;
+						if (!result?.url) throw new Error('The completed job returned no video.');
+						currentVideo = result;
+						seed = String(result.seed);
+						localStorage.removeItem(activeJobStorageKey());
+						toast.success('MiniMax H3 video completed.');
+						return;
+					}
+					if (job.status === 'failed') {
+						localStorage.removeItem(activeJobStorageKey());
+						throw new Error(job.error || 'Video generation failed.');
+					}
+				} catch (error) {
+					const message = String(error);
+					if (
+						message.includes('Video generation job not found') ||
+						!message.includes('Server connection failed')
+					) {
+						localStorage.removeItem(activeJobStorageKey());
+						throw error;
+					}
+					// Browsers suspend network requests while a phone is locked. Keep the job
+					// active and retry after connectivity resumes instead of reporting failure.
+				}
+				await wait(3000);
+			}
+		} catch (error) {
+			if (!destroyed) toast.error(`Video generation failed: ${error}`);
+		} finally {
+			generationPolling = false;
+			generating = false;
+			stopElapsedTimer();
+		}
+	};
+
 	const generateVideo = async () => {
 		if (!promptApproved || !productionPrompt.trim()) {
 			toast.error('Review and approve the production prompt first.');
@@ -454,33 +515,48 @@ Write the final MiniMax H3 production brief now.`
 		archiveCurrentVideo();
 		generating = true;
 		startElapsedTimer();
+		const jobId = crypto.randomUUID();
+		const options: VideoGenerationOptions = {
+			mode: workflowMode === 'reference' ? 'reference' : 'text',
+			aspect_ratio: aspectRatio,
+			megapixels,
+			duration,
+			...(parsedSeed !== undefined ? { seed: parsedSeed } : {}),
+			...(workflowMode !== 'text' && firstFrame
+				? { first_frame_data_url: firstFrame.dataUrl }
+				: {}),
+			...(workflowMode === 'reference'
+				? { reference_image_data_urls: referenceImages.map((image) => image.dataUrl) }
+				: {}),
+			...(workflowMode === 'first-last' && lastFrame
+				? { last_frame_data_url: lastFrame.dataUrl }
+				: {})
+		};
+		localStorage.setItem(activeJobStorageKey(), jobId);
 		try {
-			const result = await videoGenerations(localStorage.token, productionPrompt.trim(), {
-				mode: workflowMode === 'reference' ? 'reference' : 'text',
-				aspect_ratio: aspectRatio,
-				megapixels,
-				duration,
-				...(parsedSeed !== undefined ? { seed: parsedSeed } : {}),
-				...(workflowMode !== 'text' && firstFrame
-					? { first_frame_data_url: firstFrame.dataUrl }
-					: {}),
-				...(workflowMode === 'reference'
-					? { reference_image_data_urls: referenceImages.map((image) => image.dataUrl) }
-					: {}),
-				...(workflowMode === 'first-last' && lastFrame
-					? { last_frame_data_url: lastFrame.dataUrl }
-					: {})
-			});
-			if (!result?.[0]?.url) throw new Error('No video was returned.');
-			currentVideo = result[0];
-			seed = String(result[0].seed);
-			toast.success('MiniMax H3 video completed.');
+			await startVideoGenerationJob(localStorage.token, jobId, productionPrompt.trim(), options);
 		} catch (error) {
-			toast.error(`Video generation failed: ${error}`);
-		} finally {
-			generating = false;
-			stopElapsedTimer();
+			if (!String(error).includes('Server connection failed')) {
+				localStorage.removeItem(activeJobStorageKey());
+				generating = false;
+				stopElapsedTimer();
+				toast.error(`Video generation failed: ${error}`);
+				return;
+			}
+			await wait(1500);
+			try {
+				await startVideoGenerationJob(localStorage.token, jobId, productionPrompt.trim(), options);
+			} catch (retryError) {
+				if (!String(retryError).includes('Server connection failed')) {
+					localStorage.removeItem(activeJobStorageKey());
+					generating = false;
+					stopElapsedTimer();
+					toast.error(`Video generation failed: ${retryError}`);
+					return;
+				}
+			}
 		}
+		await pollVideoGenerationJob(jobId);
 	};
 
 	const loadVideoHistory = async (showSuccess = false) => {
@@ -562,8 +638,16 @@ Write the final MiniMax H3 production brief now.`
 			'';
 		loaded = true;
 		await loadVideoHistory();
+		const activeJobId = localStorage.getItem(activeJobStorageKey());
+		if (activeJobId) {
+			void pollVideoGenerationJob(activeJobId, true);
+		}
 	});
-	onDestroy(stopElapsedTimer);
+	onDestroy(() => {
+		destroyed = true;
+		generationPolling = false;
+		stopElapsedTimer();
+	});
 </script>
 
 <svelte:head>
@@ -897,7 +981,8 @@ Write the final MiniMax H3 production brief now.`
 						</button>
 						{#if generating}
 							<p class="mt-2 text-center text-xs text-gray-500">
-								ComfyUI is rendering. This usually takes one to several minutes.
+								ComfyUI is rendering in the background. You can lock your phone or return later;
+								Video Studio will reconnect to this job.
 							</p>
 						{:else if !framesReady}
 							<p class="mt-2 text-center text-xs text-amber-600">
