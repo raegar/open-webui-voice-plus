@@ -443,6 +443,28 @@ Write the final MiniMax H3 production brief now.`
 	const wait = (milliseconds: number) =>
 		new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
+	// crypto.randomUUID() only exists in secure contexts. This studio is regularly
+	// opened over the LAN on plain http, where it is undefined; getRandomValues is
+	// available there, so fall back to composing a v4 UUID by hand. The backend
+	// validates job_id as a UUID, so the shape has to stay exact.
+	const createJobId = (): string => {
+		if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+			return crypto.randomUUID();
+		}
+		const bytes = new Uint8Array(16);
+		if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+			crypto.getRandomValues(bytes);
+		} else {
+			for (let index = 0; index < bytes.length; index += 1) {
+				bytes[index] = Math.floor(Math.random() * 256);
+			}
+		}
+		bytes[6] = (bytes[6] & 0x0f) | 0x40;
+		bytes[8] = (bytes[8] & 0x3f) | 0x80;
+		const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+		return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+	};
+
 	const pollVideoGenerationJob = async (jobId: string, resumed = false) => {
 		if (generationPolling) return;
 		generationPolling = true;
@@ -513,25 +535,35 @@ Write the final MiniMax H3 production brief now.`
 			return;
 		}
 		archiveCurrentVideo();
+		// Build everything that can throw BEFORE flipping `generating`. The button is
+		// disabled while generating, so an exception raised after that point wedges the
+		// studio permanently: the timer keeps counting and no request is ever sent.
+		let jobId: string;
+		let options: VideoGenerationOptions;
+		try {
+			jobId = createJobId();
+			options = {
+				mode: workflowMode === 'reference' ? 'reference' : 'text',
+				aspect_ratio: aspectRatio,
+				megapixels,
+				duration,
+				...(parsedSeed !== undefined ? { seed: parsedSeed } : {}),
+				...(workflowMode !== 'text' && firstFrame
+					? { first_frame_data_url: firstFrame.dataUrl }
+					: {}),
+				...(workflowMode === 'reference'
+					? { reference_image_data_urls: referenceImages.map((image) => image.dataUrl) }
+					: {}),
+				...(workflowMode === 'first-last' && lastFrame
+					? { last_frame_data_url: lastFrame.dataUrl }
+					: {})
+			};
+		} catch (error) {
+			toast.error(`The generation request could not be prepared: ${error}`);
+			return;
+		}
 		generating = true;
 		startElapsedTimer();
-		const jobId = crypto.randomUUID();
-		const options: VideoGenerationOptions = {
-			mode: workflowMode === 'reference' ? 'reference' : 'text',
-			aspect_ratio: aspectRatio,
-			megapixels,
-			duration,
-			...(parsedSeed !== undefined ? { seed: parsedSeed } : {}),
-			...(workflowMode !== 'text' && firstFrame
-				? { first_frame_data_url: firstFrame.dataUrl }
-				: {}),
-			...(workflowMode === 'reference'
-				? { reference_image_data_urls: referenceImages.map((image) => image.dataUrl) }
-				: {}),
-			...(workflowMode === 'first-last' && lastFrame
-				? { last_frame_data_url: lastFrame.dataUrl }
-				: {})
-		};
 		localStorage.setItem(activeJobStorageKey(), jobId);
 		try {
 			await startVideoGenerationJob(localStorage.token, jobId, productionPrompt.trim(), options);
