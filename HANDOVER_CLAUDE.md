@@ -49,6 +49,16 @@ Flow:
 
 The current video and the history are distinct pieces of state (`currentVideo` and `videoHistory`). When a new generation starts, `archiveCurrentVideo()` moves the on-screen video into the history list, so the Current video section always shows exactly one result — the newest. Refreshing the history filters out the current video by URL, because the backend has already persisted it and it would otherwise appear twice.
 
+### Sending a chat scene to the studio
+
+Completed assistant messages carry a **Generate video of this scene** action (`ResponseMessage.svelte`), gated on the same feature flag and permission as the studio itself. It writes a payload to `sessionStorage` under `owui-video-scene-handoff` and navigates to `/video`.
+
+The payload carries the scene (that message's text) plus the previous `SCENE_CONTEXT_TURNS` messages walked back through `createMessagesList`. The surrounding turns matter: character appearance is usually established many messages before the scene being depicted, and the video model has no access to the conversation at all. Both the scene and the context are stripped of `<think>` blocks and detail tags first.
+
+The studio reads the payload once in `onMount` via `consumeSceneHandoff()` and removes it immediately, so reloading `/video` does not silently redraft an old scene. It fills `creativeDirection` with the scene, stores the excerpt in `sceneContext`, prefers the chat's own model if it is still available, forces `text` mode, and then auto-drafts.
+
+When `sceneContext` is set, `draftPrompt()` appends a block instructing the model to describe every character from scratch, to never identify anyone by name alone, to commit to an attribute rather than hedging when the conversation does not state one, and to treat earlier turns as background rather than events to re-stage. A violet banner offers **Back to chat** and **Drop context**.
+
 ### Continuing a clip
 
 Every video card (current and history) has **Continue from end**, which chains clips into a longer sequence. `captureFinalFrame()` fetches the MP4 with the bearer token, wraps it in a blob URL, seeks a decoded `<video>` element to `duration - 0.05`, and paints that frame to a canvas as a PNG data URL. Seeking to exactly `duration` lands past the last frame and paints nothing, so the epsilon is required. The blob URL keeps the canvas untainted and avoids re-negotiating auth on the media element.

@@ -4,6 +4,7 @@
 
 	import { createEventDispatcher, onDestroy } from 'svelte';
 	import { onMount, tick, getContext } from 'svelte';
+	import { goto } from '$app/navigation';
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType, t } from 'i18next';
 
@@ -46,6 +47,7 @@
 	import Image from '$lib/components/common/Image.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import PhotoRefresh from '$lib/components/icons/PhotoRefresh.svelte';
+	import VideoCamera from '$lib/components/icons/VideoCamera.svelte';
 	import RateComment from './RateComment.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import WebSearchResults from './ResponseMessage/WebSearchResults.svelte';
@@ -248,6 +250,50 @@
 	};
 
 	let regeneratingVideo = false;
+
+	// Hand a chat scene to the Video Studio. The video model cannot see this
+	// conversation, so we ship the surrounding turns as well: character looks are
+	// usually established many messages before the scene being depicted.
+	const SCENE_HANDOFF_KEY = 'owui-video-scene-handoff';
+	const SCENE_CONTEXT_TURNS = 8;
+
+	const sceneText = (content: unknown): string => {
+		if (typeof content !== 'string') return '';
+		return removeAllDetails(content)
+			.replace(/<think>[\s\S]*?<\/think>/gi, '')
+			.trim();
+	};
+
+	const generateSceneVideo = async () => {
+		const scene = sceneText(message?.content);
+		if (!scene) {
+			toast.error($i18n.t('This message has no text to build a scene from.'));
+			return;
+		}
+		const list = createMessagesList(history, messageId);
+		const context = list
+			.slice(0, -1)
+			.slice(-SCENE_CONTEXT_TURNS)
+			.map((item) => ({ role: item.role, content: sceneText(item.content) }))
+			.filter((item) => item.content);
+
+		try {
+			sessionStorage.setItem(
+				SCENE_HANDOFF_KEY,
+				JSON.stringify({
+					chatId,
+					messageId,
+					modelId: message?.model ?? selectedModels?.[0] ?? '',
+					scene,
+					context
+				})
+			);
+		} catch (error) {
+			toast.error($i18n.t('The scene could not be prepared for the Video Studio.'));
+			return;
+		}
+		await goto('/video');
+	};
 
 	const regenerateVideo = async () => {
 		const storedVideo = (message.files ?? []).find((file) => file.type === 'video');
@@ -1514,6 +1560,19 @@
 												{:else}
 													<PhotoRefresh className="size-4" strokeWidth="2.3" />
 												{/if}
+											</button>
+										</Tooltip>
+									{/if}
+
+									{#if message.done && !readOnly && $config?.features?.enable_video_generation && ($user?.role === 'admin' || $user?.permissions?.features?.image_generation)}
+										<Tooltip content={$i18n.t('Generate video of this scene')} placement="bottom">
+											<button
+												type="button"
+												aria-label={$i18n.t('Generate video of this scene')}
+												class="p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition"
+												on:click={generateSceneVideo}
+											>
+												<VideoCamera className="size-4" strokeWidth="2.3" />
 											</button>
 										</Tooltip>
 									{/if}

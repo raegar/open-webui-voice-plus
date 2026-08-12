@@ -92,6 +92,8 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	let currentVideo: GeneratedVideo | null = null;
 	let videoHistory: GeneratedVideo[] = [];
 	let continuationSource: GeneratedVideo | null = null;
+	let sceneContext: string | null = null;
+	let sceneChatId: string | null = null;
 	let capturingFrame = false;
 	let scrollContainer: HTMLDivElement;
 	let firstFileInput: HTMLInputElement;
@@ -350,6 +352,52 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 					? 'first-and-last-frame interpolation'
 					: 'reference-to-video using the ordered Picture labels';
 
+	// A chat message can hand a scene over to the studio. The payload is read once
+	// and removed, so reloading the page does not silently redraft an old scene.
+	const consumeSceneHandoff = (): boolean => {
+		let raw: string | null = null;
+		try {
+			raw = sessionStorage.getItem('owui-video-scene-handoff');
+			if (raw) sessionStorage.removeItem('owui-video-scene-handoff');
+		} catch {
+			return false;
+		}
+		if (!raw) return false;
+		try {
+			const handoff = JSON.parse(raw);
+			const scene = typeof handoff?.scene === 'string' ? handoff.scene.trim() : '';
+			if (!scene) return false;
+
+			creativeDirection = scene;
+			sceneChatId = typeof handoff?.chatId === 'string' ? handoff.chatId : null;
+			const context = Array.isArray(handoff?.context) ? handoff.context : [];
+			sceneContext =
+				context
+					.map((item: { role?: string; content?: string }) =>
+						typeof item?.content === 'string' && item.content.trim()
+							? `${item.role === 'user' ? 'User' : 'Assistant'}: ${item.content.trim()}`
+							: ''
+					)
+					.filter(Boolean)
+					.join('\n\n') || null;
+
+			// Prefer the model the chat was using; it already knows the house style.
+			if (handoff?.modelId && availableModels.some((model) => model.id === handoff.modelId)) {
+				selectedModelId = handoff.modelId;
+			}
+			selectMode('text');
+			return true;
+		} catch {
+			toast.error('The scene from chat could not be read.');
+			return false;
+		}
+	};
+
+	const clearSceneContext = () => {
+		sceneContext = null;
+		sceneChatId = null;
+	};
+
 	const draftPrompt = async () => {
 		if (!selectedModelId) {
 			toast.error('Select a chat model for prompt drafting.');
@@ -383,16 +431,33 @@ Hard constraints:
 Frame metadata only (the image pixels are intentionally unavailable to you):
 ${frameMetadata()}
 ${
-	continuationSource
+	sceneContext
 		? `
+This brief depicts a scene from a chat conversation. The video model has no access to that conversation and no memory of it, so the brief must stand entirely on its own.
+
+Preceding conversation, oldest first. Use it ONLY to establish how people, places, and objects look and sound:
+---
+${sceneContext}
+---
+
+Rules for this scene:
+- Describe every visible character from scratch: apparent age, build, skin tone, hair, clothing, and distinguishing features. A name means nothing to the video model, so never identify anyone by name alone.
+- Where the conversation does not state an attribute, choose one that fits and state it definitively. Never write "unspecified", "unknown", or hedge with "perhaps".
+- Depict only what happens in the creative direction above. Earlier turns are background for appearance and continuity, not events to re-stage.
+- Give explicit camera framing and movement, and a full soundscape including any speech.
+`
+		: ''
+}${
+							continuationSource
+								? `
 This clip is a direct continuation. The first-frame anchor is the final frame of the previous clip, so the new shot must begin exactly where that one ended. The previous clip's brief was:
 ---
 ${continuationSource.prompt}
 ---
 Carry over the same subjects, setting, lighting, wardrobe, and audio character. Advance the action into new beats; do not restate or replay what already happened. Restart the timeline at [Shot 1] with no timestamp.
 `
-		: ''
-}
+								: ''
+						}
 Write the final MiniMax H3 production brief now.`
 					}
 				]
@@ -669,11 +734,14 @@ Write the final MiniMax H3 production brief now.`
 			availableModels[0]?.id ??
 			'';
 		loaded = true;
+		const handoff = consumeSceneHandoff();
 		await loadVideoHistory();
 		const activeJobId = localStorage.getItem(activeJobStorageKey());
 		if (activeJobId) {
 			void pollVideoGenerationJob(activeJobId, true);
 		}
+		// Draft after history so the studio is usable while the model is thinking.
+		if (handoff) void draftPrompt();
 	});
 	onDestroy(() => {
 		destroyed = true;
@@ -725,6 +793,28 @@ Write the final MiniMax H3 production brief now.`
 									ComfyUI.
 								</p>
 							</div>
+							{#if sceneContext}
+								<div
+									class="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs dark:border-violet-900 dark:bg-violet-950/40"
+								>
+									<span class="text-violet-800 dark:text-violet-200">
+										Scene imported from chat. The surrounding turns are passed to the prompt model
+										so it can describe the characters and setting from scratch.
+									</span>
+									<span class="ml-auto flex shrink-0 gap-3">
+										{#if sceneChatId}
+											<a
+												class="font-medium text-violet-800 hover:underline dark:text-violet-200"
+												href="/c/{sceneChatId}">Back to chat</a
+											>
+										{/if}
+										<button
+											class="font-medium text-violet-800 hover:underline dark:text-violet-200"
+											on:click={clearSceneContext}>Drop context</button
+										>
+									</span>
+								</div>
+							{/if}
 							{#if continuationSource}
 								<div
 									class="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs dark:border-blue-900 dark:bg-blue-950/40"
