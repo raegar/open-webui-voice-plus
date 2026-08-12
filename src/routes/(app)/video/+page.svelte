@@ -11,7 +11,7 @@
 	import VideoCamera from '$lib/components/icons/VideoCamera.svelte';
 	import { config, mobile, models, settings, showSidebar, user, WEBUI_NAME } from '$lib/stores';
 
-	type WorkflowMode = 'text' | 'first' | 'first-last';
+	type WorkflowMode = 'text' | 'first' | 'first-last' | 'reference';
 	type FrameRole = 'first' | 'last';
 	type AspectRatio = '16:9' | '9:16' | '1:1';
 	type Megapixels = 0.2 | 0.4;
@@ -36,23 +36,35 @@
 		megapixels?: number;
 		has_first_frame?: boolean;
 		has_last_frame?: boolean;
+		reference_image_count?: number;
 		created_at?: number;
 	};
 
-	const PROMPT_SYSTEM = `You are a prompt-enrichment engine for MiniMax H3, which generates video and synchronized stereo audio. Turn the user's creative direction into one detailed, unambiguous production brief. Preserve the user's intent and output only the brief: no preamble, markdown, JSON, or commentary.
+	const TIMELINE_PROMPT_SYSTEM = `You are a professional prompt engineer for MiniMax H3 image/text-to-video with synchronized audio. Turn the user's scenario into a concise, vivid production prompt and output ONLY that prompt.
 
-Use exactly these three fields in this order:
-integrated_multimodal_description:
+Use contiguous [Xs-Ys] segments covering the full requested duration with no gaps. The first starts at 0s and the last ends at the exact duration. Use 2-3 segments for about 5 seconds and 4-5 for about 10 seconds.
+
+Each segment is 1-3 present-tense sentences describing observable motion rather than a static frame. Include setting, subject appearance and position, action and state change, lighting and atmosphere, plus an intentional camera angle or movement. Make events flow naturally and remain physically achievable. Imply synchronized ambience, speech, and physical sounds through the scene description; do not add separate audio sections. Preserve dialogue and visible text verbatim. Never say "show me", "create", or "generate".
+
+Frame pixels are unavailable to you. Never invent their contents. A first-frame workflow must begin exactly at the supplied frame and develop forward. A first-and-last workflow must describe a plausible continuous path that starts exactly at the first frame and lands exactly at the last frame. Treat duration and aspect ratio as hard constraints.`;
+
+	const REFERENCE_PROMPT_SYSTEM = `You are an expert prompt engineer for MiniMax H3 Ref2VA. Turn the user's scenario and reference-image descriptions into a structurally compatible prompt that drives both video and audio. Output ONLY the formatted prompt.
+
+The supplied images are connected in order as <Picture 1>, <Picture 2>, and so on. You receive metadata, not pixels: never invent image contents. Use only the user's description to define what each reference contributes.
+
+Use exactly these six sections in order:
+subject_definitions:
+summary:
+retention_analysis:
+detailed_description:
 overall_soundscape:
 non_diegetic_music:
 
-In integrated_multimodal_description, describe observable visuals and audio along a timeline. Start [Shot 1] without a timestamp. Later cuts use [Shot N] At MM:SS.mmm with strictly increasing times inside the requested duration. Give each beat one primary change and an observable end state. Put the most important beat before the final beat. Always specify one intentional camera behavior per shot, including amplitude and speed when useful. For a static shot say the frame never moves and explicitly prohibit pan, push-in, and reframing.
+In subject_definitions, define reusable <Subject N> identities, scenes, or styles and cite the contributing <Picture N>. In summary, begin with [reference generation] and state the target and relationships in one paragraph. In retention_analysis, give one line per subject or picture with a fixed marker: fully_preserved, partially_preserved, attribute_transfer, or weak_reference, and say where it appears.
 
-Put spoken words verbatim inside <d>[Language] words.</d>. Keep speaker IDs such as (S1) stable. State when lips close after dialogue. Put visible text in double quotes verbatim, or explicitly say no text appears. overall_soundscape is one short paragraph covering ambience and physical sounds without repeating dialogue. non_diegetic_music describes instrumentation, tempo, rhythm, and dynamics, or N/A.
+In detailed_description, establish the overall style and describe every shot concretely: composition, appearance, position, action, environment, lighting, camera, state changes, and where referenced content appears. [Shot 1] has no timestamp. Later cuts use [Shot N] At 00:SS.mmm with strictly increasing times inside the duration. Camera movement includes type, amplitude, and speed. Keep stable speaker IDs such as (S1); put exact dialogue inside <d>[Language] words.</d>. Put visible text in double quotes verbatim.
 
-Frame images are handled directly by the FL2VA workflow. You receive only their metadata and cannot see their pixels. Never invent image contents. With a first-frame anchor, begin exactly from the supplied first frame and describe the motion that develops from it using only facts in the user's direction. With first and last anchors, favor one continuous shot and describe a plausible interpolation that begins exactly on the first frame and lands exactly on the last frame at the requested duration. Never use the six-section Ref2VA template; Reference-to-Video is not enabled.
-
-Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep the action physically achievable. Express exclusions in plain English because MiniMax H3 has no negative-prompt field.`;
+overall_soundscape contains ambience and physical sounds without dialogue or music. non_diegetic_music specifies instrumentation, tempo, rhythm, and dynamics, or N/A. Treat duration and aspect ratio as hard constraints. Prefer a focused, achievable sequence over unnecessary shot changes.`;
 
 	let loaded = false;
 	let selectedModelId = '';
@@ -66,6 +78,7 @@ Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep
 	let seed: string | number | null = '';
 	let firstFrame: FrameAsset | null = null;
 	let lastFrame: FrameAsset | null = null;
+	let referenceImages: FrameAsset[] = [];
 	let drafting = false;
 	let generating = false;
 	let elapsedSeconds = 0;
@@ -77,6 +90,7 @@ Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep
 	let firstFileInput: HTMLInputElement;
 	let historyLoading = false;
 	let lastFileInput: HTMLInputElement;
+	let referenceFileInput: HTMLInputElement;
 	let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 
 	$: availableModels = ($models ?? []).filter((model) => !(model?.info?.meta?.hidden ?? false));
@@ -84,6 +98,7 @@ Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep
 		$config?.features?.enable_video_generation &&
 		($user?.role === 'admin' || $user?.permissions?.features?.image_generation);
 	$: framesReady =
+		(workflowMode === 'reference' && referenceImages.length > 0) ||
 		workflowMode === 'text' ||
 		(workflowMode === 'first' && firstFrame !== null) ||
 		(workflowMode === 'first-last' && firstFrame !== null && lastFrame !== null);
@@ -97,7 +112,14 @@ Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep
 		if (mode === 'text') {
 			firstFrame = null;
 			lastFrame = null;
+			referenceImages = [];
 		} else if (mode === 'first') {
+			lastFrame = null;
+			referenceImages = [];
+		} else if (mode === 'first-last') {
+			referenceImages = [];
+		} else {
+			firstFrame = null;
 			lastFrame = null;
 		}
 		// Any manual mode change means the starting image is no longer a continuation.
@@ -163,6 +185,37 @@ Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep
 	const handleDrop = async (event: DragEvent, role: FrameRole) => {
 		event.preventDefault();
 		await setFrame(role, event.dataTransfer?.files?.[0]);
+	};
+
+	const addReferenceFiles = async (files: File[]) => {
+		if (!files.length) return;
+		if (referenceImages.length + files.length > 9) {
+			toast.error('MiniMax H3 Ref2VA supports up to 9 reference images.');
+			return;
+		}
+		try {
+			const additions = await Promise.all(files.map(readFrame));
+			referenceImages = [...referenceImages, ...additions];
+			markPromptForReview();
+		} catch (error) {
+			toast.error(`${error}`);
+		}
+	};
+
+	const handleReferenceInput = async (event: Event) => {
+		const input = event.currentTarget as HTMLInputElement;
+		await addReferenceFiles(Array.from(input.files ?? []));
+		input.value = '';
+	};
+
+	const handleReferenceDrop = async (event: DragEvent) => {
+		event.preventDefault();
+		await addReferenceFiles(Array.from(event.dataTransfer?.files ?? []));
+	};
+
+	const removeReferenceImage = (index: number) => {
+		referenceImages = referenceImages.filter((_, itemIndex) => itemIndex !== index);
+		markPromptForReview();
 	};
 
 	// Grab the last rendered frame of an existing clip so it can anchor the next one.
@@ -251,6 +304,14 @@ Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep
 
 	const frameMetadata = () => {
 		if (workflowMode === 'text') return 'No frame images are attached.';
+		if (workflowMode === 'reference') {
+			return referenceImages
+				.map(
+					(image, index) =>
+						`<Picture ${index + 1}>: ${image.name}, ${image.width}x${image.height}, ${image.type}, ${humanFileSize(image.size)}.`
+				)
+				.join('\n');
+		}
 		const items = [
 			firstFrame
 				? `First-frame anchor: ${firstFrame.name}, ${firstFrame.width}x${firstFrame.height}, ${firstFrame.type}, ${humanFileSize(firstFrame.size)}.`
@@ -273,6 +334,15 @@ Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep
 			.replace(/\s*```\s*$/i, '')
 			.trim();
 
+	const workflowLabel = () =>
+		workflowMode === 'text'
+			? 'text-to-video'
+			: workflowMode === 'first'
+				? 'first-frame image-to-video'
+				: workflowMode === 'first-last'
+					? 'first-and-last-frame interpolation'
+					: 'reference-to-video using the ordered Picture labels';
+
 	const draftPrompt = async () => {
 		if (!selectedModelId) {
 			toast.error('Select a chat model for prompt drafting.');
@@ -289,7 +359,10 @@ Treat duration and aspect ratio as hard constraints. For 3-10 second clips, keep
 				model: selectedModelId,
 				stream: false,
 				messages: [
-					{ role: 'system', content: PROMPT_SYSTEM },
+					{
+						role: 'system',
+						content: workflowMode === 'reference' ? REFERENCE_PROMPT_SYSTEM : TIMELINE_PROMPT_SYSTEM
+					},
 					{
 						role: 'user',
 						content: `Creative direction:
@@ -298,7 +371,7 @@ ${creativeDirection.trim()}
 Hard constraints:
 - Duration: ${duration} seconds
 - Aspect ratio: ${aspectRatio}
-- Workflow: ${workflowMode === 'text' ? 'text-to-video' : workflowMode === 'first' ? 'first-frame image-to-video' : 'first-and-last-frame interpolation'}
+- Workflow: ${workflowLabel()}
 
 Frame metadata only (the image pixels are intentionally unavailable to you):
 ${frameMetadata()}
@@ -383,12 +456,16 @@ Write the final MiniMax H3 production brief now.`
 		startElapsedTimer();
 		try {
 			const result = await videoGenerations(localStorage.token, productionPrompt.trim(), {
+				mode: workflowMode === 'reference' ? 'reference' : 'text',
 				aspect_ratio: aspectRatio,
 				megapixels,
 				duration,
 				...(parsedSeed !== undefined ? { seed: parsedSeed } : {}),
 				...(workflowMode !== 'text' && firstFrame
 					? { first_frame_data_url: firstFrame.dataUrl }
+					: {}),
+				...(workflowMode === 'reference'
+					? { reference_image_data_urls: referenceImages.map((image) => image.dataUrl) }
 					: {}),
 				...(workflowMode === 'first-last' && lastFrame
 					? { last_frame_data_url: lastFrame.dataUrl }
@@ -424,7 +501,13 @@ Write the final MiniMax H3 production brief now.`
 
 	const reuseVideoPrompt = (video: GeneratedVideo) => {
 		const mode: WorkflowMode =
-			video.mode === 'first-last' ? 'first-last' : video.mode === 'image' ? 'first' : 'text';
+			video.mode === 'reference'
+				? 'reference'
+				: video.mode === 'first-last'
+					? 'first-last'
+					: video.mode === 'image'
+						? 'first'
+						: 'text';
 		selectMode(mode);
 		productionPrompt = video.prompt;
 		promptApproved = false;
@@ -441,7 +524,9 @@ Write the final MiniMax H3 production brief now.`
 		toast.success(
 			mode === 'text'
 				? 'Prompt and settings loaded for review.'
-				: 'Prompt and settings loaded. Reattach the frame images before generating.'
+				: mode === 'reference'
+					? 'Prompt and settings loaded. Reattach the reference images in the same order.'
+					: 'Prompt and settings loaded. Reattach the frame images before generating.'
 		);
 	};
 
@@ -539,8 +624,10 @@ Write the final MiniMax H3 production brief now.`
 									>
 								</div>
 							{/if}
-							<div class="grid grid-cols-3 gap-1 rounded-xl bg-gray-100 p-1 dark:bg-gray-850">
-								{#each [{ id: 'text', label: 'Text' }, { id: 'first', label: 'Image' }, { id: 'first-last', label: 'First + last' }] as item}
+							<div
+								class="grid grid-cols-2 gap-1 rounded-xl bg-gray-100 p-1 sm:grid-cols-4 dark:bg-gray-850"
+							>
+								{#each [{ id: 'text', label: 'Text' }, { id: 'first', label: 'Image' }, { id: 'first-last', label: 'First + last' }, { id: 'reference', label: 'Reference' }] as item}
 									<button
 										class="rounded-lg px-2 py-2 text-sm transition {workflowMode === item.id
 											? 'bg-white font-medium shadow-sm dark:bg-gray-700'
@@ -551,7 +638,7 @@ Write the final MiniMax H3 production brief now.`
 									</button>
 								{/each}
 							</div>
-							{#if workflowMode !== 'text'}
+							{#if workflowMode === 'first' || workflowMode === 'first-last'}
 								<div
 									class="mt-4 grid gap-3 {workflowMode === 'first-last' ? 'sm:grid-cols-2' : ''}"
 								>
@@ -603,6 +690,61 @@ Write the final MiniMax H3 production brief now.`
 									Frame pixels go only to the ComfyUI generation workflow. The prompt model receives
 									filename, dimensions, type, size, and frame role.
 								</p>
+							{/if}
+							{#if workflowMode === 'reference'}
+								<div class="mt-4">
+									<div class="mb-1.5 flex items-center justify-between gap-3">
+										<div class="text-xs font-medium text-gray-600 dark:text-gray-300">
+											Reference images
+										</div>
+										<div class="text-xs text-gray-500">{referenceImages.length}/9</div>
+									</div>
+									<button
+										class="flex min-h-24 w-full items-center justify-center rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 text-sm text-gray-500 hover:border-gray-500 dark:border-gray-700 dark:bg-gray-900"
+										on:click={() => referenceFileInput.click()}
+										on:drop={handleReferenceDrop}
+										on:dragover|preventDefault
+									>
+										Drop reference images or click to browse
+									</button>
+									<input
+										class="hidden"
+										type="file"
+										multiple
+										accept="image/png,image/jpeg,image/webp"
+										bind:this={referenceFileInput}
+										on:change={handleReferenceInput}
+									/>
+									{#if referenceImages.length}
+										<div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+											{#each referenceImages as image, index}
+												<div
+													class="relative overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700"
+												>
+													<img
+														src={image.dataUrl}
+														alt={`Picture ${index + 1}`}
+														class="aspect-video w-full object-contain"
+													/>
+													<div
+														class="flex items-center gap-2 border-t border-gray-200 px-2 py-1.5 text-xs dark:border-gray-700"
+													>
+														<span class="min-w-0 flex-1 truncate">&lt;Picture {index + 1}&gt;</span>
+														<button
+															class="shrink-0 text-gray-500 hover:text-red-600"
+															aria-label={`Remove Picture ${index + 1}`}
+															on:click={() => removeReferenceImage(index)}>Remove</button
+														>
+													</div>
+												</div>
+											{/each}
+										</div>
+									{/if}
+									<p class="mt-2 text-xs text-gray-500">
+										Order matters: images are connected to Ref2VA as Picture 1 through Picture 9.
+										Pixels go only to ComfyUI; the prompt model receives metadata and labels.
+									</p>
+								</div>
 							{/if}
 						</section>
 
@@ -769,10 +911,12 @@ Write the final MiniMax H3 production brief now.`
 						<div
 							class="mt-5 border-t border-gray-200 pt-4 text-xs leading-5 text-gray-500 dark:border-gray-800"
 						>
-							<p>Reference-to-Video is intentionally not exposed yet.</p>
+							<p>
+								Reference mode uses the dedicated Ref2VA model and supports up to 9 ordered images.
+							</p>
 							<p class="mt-2">
-								The normal chat pipeline remains text-only for video generation; frame workflows
-								live only in this studio.
+								The normal chat pipeline remains text-only for video generation; frame and reference
+								workflows live only in this studio.
 							</p>
 						</div>
 					</aside>

@@ -23,9 +23,10 @@ NUMBER_SAFE_INTEGER_MAX = 2**53 - 1
 
 class CreateVideoForm(BaseModel):
     prompt: str
-    mode: Literal["text"] = "text"
+    mode: Literal["text", "reference"] = "text"
     first_frame_data_url: Optional[str] = Field(default=None, max_length=36_000_000)
     last_frame_data_url: Optional[str] = Field(default=None, max_length=36_000_000)
+    reference_image_data_urls: list[str] = Field(default_factory=list, max_length=9)
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
     megapixels: Literal[0.2, 0.4] = 0.2
     duration: Literal[3, 5, 10] = 3
@@ -71,6 +72,11 @@ def _resolve_regeneration_prompt(form_data: CreateVideoForm, user) -> Optional[s
 
 
 def _load_frame_data_url(value: str, role: str) -> tuple[bytes, str, str]:
+    if len(value) > 36_000_000:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{role} must be no larger than 25 MB",
+        )
     try:
         header, encoded = value.split(",", 1)
         content_type = header.removeprefix("data:").split(";", 1)[0].lower()
@@ -156,6 +162,7 @@ def _get_video_history_items(request: Request, user, limit: int) -> list[dict]:
                 "seed": str(seed) if seed is not None else "",
                 "has_first_frame": bool(generation.get("has_first_frame", False)),
                 "has_last_frame": bool(generation.get("has_last_frame", False)),
+                "reference_image_count": generation.get("reference_image_count", 0),
                 "created_at": file_item.created_at,
             }
         )
@@ -192,6 +199,20 @@ async def video_generations(
         if form_data.seed is not None
         else random.randrange(NUMBER_SAFE_INTEGER_MAX + 1)
     )
+    if form_data.mode == "reference" and (
+        not form_data.reference_image_data_urls
+        or form_data.first_frame_data_url
+        or form_data.last_frame_data_url
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Reference mode requires 1-9 reference images and cannot use frame anchors",
+        )
+    if form_data.mode != "reference" and form_data.reference_image_data_urls:
+        raise HTTPException(
+            status_code=400,
+            detail="Reference images require Reference-to-Video mode",
+        )
     if form_data.last_frame_data_url and not form_data.first_frame_data_url:
         raise HTTPException(
             status_code=400,
@@ -207,6 +228,10 @@ async def video_generations(
         if form_data.last_frame_data_url
         else None
     )
+    reference_images = [
+        _load_frame_data_url(value, f"Reference image {index + 1}")
+        for index, value in enumerate(form_data.reference_image_data_urls)
+    ]
     client = ComfyUIVideoClient(
         request.app.state.config.COMFYUI_VIDEO_BASE_URL,
         request.app.state.config.COMFYUI_VIDEO_API_KEY,
@@ -220,16 +245,23 @@ async def video_generations(
         seed,
         first_frame,
         last_frame,
+        reference_images,
     )
     generation_metadata = {
         **form_data.model_dump(
-            exclude={"first_frame_data_url", "last_frame_data_url"}, exclude_none=True
+            exclude={
+                "first_frame_data_url",
+                "last_frame_data_url",
+                "reference_image_data_urls",
+            },
+            exclude_none=True,
         ),
         **metadata,
         "seed": seed,
         "content_type": content_type,
         "has_first_frame": first_frame is not None,
         "has_last_frame": last_frame is not None,
+        "reference_image_count": len(reference_images),
     }
     _, url = _upload_video(
         request,
@@ -244,7 +276,15 @@ async def video_generations(
             "url": url,
             "content_type": content_type,
             "prompt": form_data.prompt,
-            "mode": "first-last" if last_frame else "image" if first_frame else "text",
+            "mode": (
+                "reference"
+                if reference_images
+                else "first-last"
+                if last_frame
+                else "image"
+                if first_frame
+                else "text"
+            ),
             "aspect_ratio": form_data.aspect_ratio,
             "megapixels": form_data.megapixels,
             "duration": form_data.duration,

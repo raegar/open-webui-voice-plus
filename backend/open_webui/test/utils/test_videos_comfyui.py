@@ -2,6 +2,7 @@ import pytest
 
 from open_webui.utils.videos.comfyui import (
     ComfyUIVideoClient,
+    build_minimax_h3_reference_workflow,
     build_minimax_h3_workflow,
     find_video_output,
 )
@@ -81,6 +82,28 @@ def test_build_workflow_wires_first_and_last_frames():
     assert inputs["last_frame"] == ["115", 0]
 
 
+def test_build_reference_workflow_wires_ordered_images():
+    workflow = build_minimax_h3_reference_workflow(
+        "prompt", "16:9", 0.4, 10, 42, ["person.png", "location.webp"]
+    )
+    inputs = workflow["136"]["inputs"]
+    assert workflow["127"]["inputs"]["unet_name"] == (
+        "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+    )
+    assert workflow["136"]["class_type"] == "MiniMaxH3ReferenceToVideo"
+    assert (inputs["width"], inputs["height"]) == (864, 480)
+    assert inputs["ref_images.ref_image_0"] == ["ref-image-0", 0]
+    assert inputs["ref_images.ref_image_1"] == ["ref-image-1", 0]
+    assert workflow["ref-image-0"]["inputs"]["image"] == "person.png"
+    assert workflow["ref-image-1"]["inputs"]["image"] == "location.webp"
+    assert workflow["129"]["inputs"]["noise_seed"] == 42
+
+
+def test_build_reference_workflow_requires_one_to_nine_images():
+    with pytest.raises(ValueError):
+        build_minimax_h3_reference_workflow("prompt", "16:9", 0.2, 5, 42, [])
+
+
 def test_find_video_output_uses_extension_not_bucket_name():
     entry = {
         "outputs": {
@@ -152,3 +175,36 @@ async def test_client_uploads_and_wires_first_and_last_frames():
     uploads = [call for call in session.calls if "/upload/image" in call[1]]
     assert len(uploads) == 2
     assert uploads[0][2]["files"]["image"][2] == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_client_uploads_and_wires_reference_images():
+    async def no_sleep(_):
+        return None
+
+    session = FakeSession()
+    client = ComfyUIVideoClient(
+        "http://comfyui:8188",
+        session=session,
+        poll_interval=0,
+        sleep=no_sleep,
+    )
+    await client.generate(
+        "subject_definitions:\n<Subject 1> comes from <Picture 1>.",
+        "9:16",
+        0.2,
+        5,
+        7,
+        reference_images=[
+            (b"first", "person.png", "image/png"),
+            (b"second", "style.webp", "image/webp"),
+        ],
+    )
+    inputs = session.workflow["136"]["inputs"]
+    assert inputs["ref_images.ref_image_0"][0] == "ref-image-0"
+    assert inputs["ref_images.ref_image_1"][0] == "ref-image-1"
+    assert session.workflow["127"]["inputs"]["unet_name"].startswith(
+        "minimax_h3_ref2va"
+    )
+    uploads = [call for call in session.calls if "/upload/image" in call[1]]
+    assert len(uploads) == 2

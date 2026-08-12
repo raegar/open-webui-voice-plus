@@ -59,7 +59,7 @@ The captured frame becomes the first-frame anchor: `continueFromVideo()` switche
 
 Layout note: the Current video and Video history sections sit **below** the two-column grid, not inside `<main>`. They were originally in the main column, which put the Generate button after the entire history in document order and made it unreachable without scrolling past every past clip. Keep the settings panel ahead of both results sections in document order.
 
-Reference-to-Video is intentionally hidden/not implemented. It needs a model that is not installed in the current ComfyUI setup.
+Reference-to-Video is enabled in Video Studio for 1-9 ordered images. Image order maps directly to <Picture 1> through <Picture 9>; image pixels go only to ComfyUI and the prompt model receives metadata and labels.
 
 ## Code map
 
@@ -101,12 +101,15 @@ The installed tested models are:
 
 ```text
 minimax_h3_fl2va_pruned_int8_convrot.safetensors
+minimax_h3_ref2va_pruned_int8_convrot.safetensors
 qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors
 minimax_h3_video_vae_fp16.safetensors
 minimax_h3_audio_vae_fp32.safetensors
 ```
 
 The workflow uses the tested FL2VA graph, including node `105:104` (`MiniMaxH3ImageToVideo`) and optional `LoadImage` nodes `114` (first frame) and `115` (last frame). Uploaded images receive unique names such as `owui-video-<uuid>-<filename>` via ComfyUI `/upload/image` with `overwrite=false`.
+
+Reference mode uses the official `MiniMaxH3ReferenceToVideo` graph and dedicated Ref2VA diffusion model. Ordered `LoadImage` nodes are wired into `ref_images.ref_image_0` through `ref_images.ref_image_8`; `ref_image_size` is `match`.
 
 The resolution map is approximately:
 
@@ -118,15 +121,7 @@ The resolution map is approximately:
 
 Frame count is derived from duration at 24 fps and rounded to the workflow’s required 17-frame cadence. Do not change model/node names without checking the installed ComfyUI workflow and the focused tests.
 
-The prompt guide used for drafting is [Naxdy’s H3 guide](https://gist.github.com/Naxdy/43b7422a1e4a79fb8b0489c6c39eaace). Its key T2VA output fields are:
-
-```text
-integrated_multimodal_description:
-overall_soundscape:
-non_diegetic_music:
-```
-
-Keep one coherent timeline and camera description, and keep dialogue/on-screen-text instructions explicit. The current workflow is FL2VA, not full reference-to-video.
+Production T2V/I2V prompts use contiguous `[Xs-Ys]` segments covering the exact duration, with 2-3 segments around 5 seconds and 4-5 around 10 seconds. Ref2VA prompts use the six-section template `subject_definitions`, `summary`, `retention_analysis`, `detailed_description`, `overall_soundscape`, and `non_diegetic_music`. Keep Picture labels stable and in upload order.
 
 ## Verification commands
 
@@ -231,7 +226,7 @@ Never use `docker rm -v` here: the `open-webui` volume contains user data. Plain
 
 ## Known limitations and next work
 
-- Reference-to-Video is not exposed; it requires `minimax_h3_ref2va_pruned_int8_convrot.safetensors` (and the corresponding workflow/model setup).
+- Reference mode currently supports images only. The underlying node also supports reference video and audio, but those upload and loader paths are not exposed in Video Studio yet.
 - History currently returns the newest 50 items by default and has no delete/management UI.
 - Uploaded source frames are used by the workflow but are not persisted as OWUI files for later re-editing.
 - Prompt drafting intentionally sends image metadata, never image bytes, to the selected chat model.

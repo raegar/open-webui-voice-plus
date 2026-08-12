@@ -2,7 +2,7 @@ import asyncio
 import mimetypes
 import time
 from pathlib import Path, PurePosixPath
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional, Sequence
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -178,6 +178,158 @@ def build_minimax_h3_workflow(
     return workflow
 
 
+def build_minimax_h3_reference_workflow(
+    prompt: str,
+    aspect_ratio: str,
+    megapixels: float,
+    duration: int,
+    seed: int,
+    reference_image_names: Sequence[str],
+) -> dict:
+    """Build the official MiniMax H3 Ref2VA image-reference graph."""
+    if not 1 <= len(reference_image_names) <= 9:
+        raise ValueError("Reference-to-Video requires between 1 and 9 images")
+    try:
+        width, height = RESOLUTIONS[(aspect_ratio, megapixels)]
+    except KeyError as exc:
+        raise ValueError("Unsupported video resolution") from exc
+
+    workflow = {
+        "127": {
+            "inputs": {
+                "unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+                "weight_dtype": "default",
+            },
+            "class_type": "UNETLoader",
+            "_meta": {"title": "Load Ref2VA Diffusion Model"},
+        },
+        "128": {
+            "inputs": {
+                "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                "type": "minimax",
+                "device": "default",
+            },
+            "class_type": "CLIPLoader",
+            "_meta": {"title": "Load CLIP"},
+        },
+        "132": {
+            "inputs": {"value": float(duration)},
+            "class_type": "PrimitiveFloat",
+            "_meta": {"title": "Float (duration)"},
+        },
+        "131": {
+            "inputs": {
+                "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17",
+                "values.a": ["132", 0],
+            },
+            "class_type": "ComfyMathExpression",
+            "_meta": {"title": "Math Expression"},
+        },
+        "119": {
+            "inputs": {"vae_name": "minimax_h3_video_vae_fp16.safetensors"},
+            "class_type": "VAELoader",
+            "_meta": {"title": "Load Video VAE"},
+        },
+        "120": {
+            "inputs": {"vae_name": "minimax_h3_audio_vae_fp32.safetensors"},
+            "class_type": "VAELoader",
+            "_meta": {"title": "Load Audio VAE"},
+        },
+        "136": {
+            "inputs": {
+                "prompt": prompt,
+                "width": width,
+                "height": height,
+                "length": ["131", 1],
+                "ref_image_size": "match",
+                "clip": ["128", 0],
+                "vae": ["119", 0],
+                "audio_vae": ["120", 0],
+            },
+            "class_type": "MiniMaxH3ReferenceToVideo",
+            "_meta": {"title": "MiniMax H3 Reference to Video"},
+        },
+        "129": {
+            "inputs": {"noise_seed": seed},
+            "class_type": "RandomNoise",
+            "_meta": {"title": "RandomNoise"},
+        },
+        "123": {
+            "inputs": {"sampler_name": "res_multistep"},
+            "class_type": "KSamplerSelect",
+            "_meta": {"title": "KSamplerSelect"},
+        },
+        "124": {
+            "inputs": {
+                "scheduler": "simple",
+                "steps": 20,
+                "denoise": 1.0,
+                "model": ["127", 0],
+            },
+            "class_type": "BasicScheduler",
+            "_meta": {"title": "BasicScheduler"},
+        },
+        "126": {
+            "inputs": {"model": ["127", 0], "conditioning": ["136", 0]},
+            "class_type": "BasicGuider",
+            "_meta": {"title": "Basic Guider"},
+        },
+        "125": {
+            "inputs": {
+                "noise": ["129", 0],
+                "guider": ["126", 0],
+                "sampler": ["123", 0],
+                "sigmas": ["124", 0],
+                "latent_image": ["136", 1],
+            },
+            "class_type": "SamplerCustomAdvanced",
+            "_meta": {"title": "SamplerCustomAdvanced"},
+        },
+        "122": {
+            "inputs": {"samples": ["125", 0], "vae": ["119", 0]},
+            "class_type": "VAEDecode",
+            "_meta": {"title": "VAE Decode"},
+        },
+        "121": {
+            "inputs": {"samples": ["125", 0], "vae": ["120", 0]},
+            "class_type": "VAEDecodeAudio",
+            "_meta": {"title": "VAE Decode Audio"},
+        },
+        "130": {
+            "inputs": {
+                "fps": 24.0,
+                "bit_depth": 8,
+                "images": ["122", 0],
+                "audio": ["121", 0],
+            },
+            "class_type": "CreateVideo",
+            "_meta": {"title": "Create Video"},
+        },
+        "92": {
+            "inputs": {
+                "filename_prefix": "video/MiniMax_H3_Ref2VA",
+                "format": "auto",
+                "codec": "auto",
+                "video-preview": "",
+                "video": ["130", 0],
+            },
+            "class_type": "SaveVideo",
+            "_meta": {"title": "Save Video"},
+        },
+    }
+
+    for index, image_name in enumerate(reference_image_names):
+        node_id = f"ref-image-{index}"
+        workflow[node_id] = {
+            "inputs": {"image": image_name},
+            "class_type": "LoadImage",
+            "_meta": {"title": f"Load Reference Image {index + 1}"},
+        }
+        workflow["136"]["inputs"][f"ref_images.ref_image_{index}"] = [node_id, 0]
+
+    return workflow
+
+
 def find_video_output(history_entry: dict) -> Optional[dict]:
     for node_output in history_entry.get("outputs", {}).values():
         if not isinstance(node_output, dict):
@@ -258,18 +410,33 @@ class ComfyUIVideoClient:
         seed: int,
         first_frame: Optional[tuple[bytes, str, str]] = None,
         last_frame: Optional[tuple[bytes, str, str]] = None,
+        reference_images: Optional[Sequence[tuple[bytes, str, str]]] = None,
     ) -> tuple[bytes, str, str]:
         first_frame_name = await self.upload_image(*first_frame) if first_frame else None
         last_frame_name = await self.upload_image(*last_frame) if last_frame else None
-        workflow = build_minimax_h3_workflow(
-            prompt,
-            aspect_ratio,
-            megapixels,
-            duration,
-            seed,
-            first_frame_name,
-            last_frame_name,
-        )
+        reference_image_names = [
+            await self.upload_image(*reference_image)
+            for reference_image in reference_images or []
+        ]
+        if reference_image_names:
+            workflow = build_minimax_h3_reference_workflow(
+                prompt,
+                aspect_ratio,
+                megapixels,
+                duration,
+                seed,
+                reference_image_names,
+            )
+        else:
+            workflow = build_minimax_h3_workflow(
+                prompt,
+                aspect_ratio,
+                megapixels,
+                duration,
+                seed,
+                first_frame_name,
+                last_frame_name,
+            )
         response = await self._request(
             "POST",
             "/prompt",
