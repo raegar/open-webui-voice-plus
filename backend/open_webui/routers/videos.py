@@ -36,7 +36,7 @@ class CreateVideoForm(BaseModel):
     reference_image_data_urls: list[str] = Field(default_factory=list, max_length=9)
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
     megapixels: Literal[0.2, 0.4] = 0.2
-    duration: Literal[3, 5, 10] = 3
+    duration: Literal[3, 5, 10, 15] = 3
     seed: Optional[int] = Field(default=None, ge=0, le=2**63 - 1)
     chat_id: Optional[str] = None
     message_id: Optional[str] = None

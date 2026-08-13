@@ -4,7 +4,7 @@ export type VideoGenerationOptions = {
 	mode?: 'text' | 'reference';
 	aspect_ratio: '16:9' | '9:16' | '1:1';
 	megapixels: 0.2 | 0.4;
-	duration: 3 | 5 | 10;
+	duration: 3 | 5 | 10 | 15;
 	seed?: number | string;
 	first_frame_data_url?: string;
 	last_frame_data_url?: string;

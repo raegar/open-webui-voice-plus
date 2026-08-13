@@ -20,7 +20,7 @@
 	type FrameRole = 'first' | 'last';
 	type AspectRatio = '16:9' | '9:16' | '1:1';
 	type Megapixels = 0.2 | 0.4;
-	type Duration = 3 | 5 | 10;
+	type Duration = 3 | 5 | 10 | 15;
 	type FrameAsset = {
 		name: string;
 		type: string;
@@ -47,7 +47,7 @@
 
 	const TIMELINE_PROMPT_SYSTEM = `You are a professional prompt engineer for MiniMax H3 image/text-to-video with synchronized audio. Turn the user's scenario into a concise, vivid production prompt and output ONLY that prompt.
 
-Use contiguous [Xs-Ys] segments covering the full requested duration with no gaps. The first starts at 0s and the last ends at the exact duration. Use 2-3 segments for about 5 seconds and 4-5 for about 10 seconds.
+Use contiguous [Xs-Ys] segments covering the full requested duration with no gaps. The first starts at 0s and the last ends at the exact duration. Use 2-3 segments for about 5 seconds, 4-5 for about 10 seconds, and 6-7 for about 15 seconds.
 
 Each segment is 1-3 present-tense sentences describing observable motion rather than a static frame. Include setting, subject appearance and position, action and state change, lighting and atmosphere, plus an intentional camera angle or movement. Make events flow naturally and remain physically achievable. Imply synchronized ambience, speech, and physical sounds through the scene description; do not add separate audio sections. Preserve dialogue and visible text verbatim. Never say "show me", "create", or "generate".
 
@@ -79,7 +79,7 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	let promptApproved = false;
 	let aspectRatio: AspectRatio = '16:9';
 	let megapixels: Megapixels = 0.2;
-	let duration: Duration = 5;
+	let duration: Duration = 10;
 	let seed: string | number | null = '';
 	let firstFrame: FrameAsset | null = null;
 	let lastFrame: FrameAsset | null = null;
@@ -690,7 +690,7 @@ Write the final MiniMax H3 production brief now.`
 		if (video.megapixels === 0.2 || video.megapixels === 0.4) {
 			megapixels = video.megapixels;
 		}
-		if (video.duration === 3 || video.duration === 5 || video.duration === 10) {
+		if ([3, 5, 10, 15].includes(video.duration)) {
 			duration = video.duration;
 		}
 		seed = video.seed;
@@ -783,351 +783,344 @@ Write the final MiniMax H3 production brief now.`
 	{#if loaded}
 		<div class="flex-1 overflow-y-auto" bind:this={scrollContainer}>
 			<div class="mx-auto flex w-full max-w-7xl flex-col gap-5 p-4 lg:p-6">
-				<div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
-					<main class="flex min-w-0 flex-col gap-5">
-						<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
-							<div class="mb-4">
-								<h1 class="text-xl font-semibold">Create a video</h1>
-								<p class="mt-1 text-sm text-gray-500">
-									Shape the idea with a chat model, approve the resulting H3 prompt, then send it to
-									ComfyUI.
-								</p>
-							</div>
-							{#if sceneContext}
-								<div
-									class="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs dark:border-violet-900 dark:bg-violet-950/40"
-								>
-									<span class="text-violet-800 dark:text-violet-200">
-										Scene imported from chat. The surrounding turns are passed to the prompt model
-										so it can describe the characters and setting from scratch.
-									</span>
-									<span class="ml-auto flex shrink-0 gap-3">
-										{#if sceneChatId}
-											<a
-												class="font-medium text-violet-800 hover:underline dark:text-violet-200"
-												href="/c/{sceneChatId}">Back to chat</a
-											>
-										{/if}
-										<button
-											class="font-medium text-violet-800 hover:underline dark:text-violet-200"
-											on:click={clearSceneContext}>Drop context</button
-										>
-									</span>
-								</div>
-							{/if}
-							{#if continuationSource}
-								<div
-									class="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs dark:border-blue-900 dark:bg-blue-950/40"
-								>
-									<span class="text-blue-800 dark:text-blue-200">
-										Continuing from a {continuationSource.duration}s clip. Its final frame is the
-										starting image and its brief is passed to the prompt model as context, so
-										describe only what happens next.
-									</span>
-									<button
-										class="ml-auto shrink-0 font-medium text-blue-800 hover:underline dark:text-blue-200"
-										on:click={clearContinuation}>Start fresh instead</button
+				<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+					<div class="mb-4">
+						<h1 class="text-xl font-semibold">Create a video</h1>
+						<p class="mt-1 text-sm text-gray-500">
+							Shape the idea with a chat model, approve the resulting H3 prompt, then send it to
+							ComfyUI.
+						</p>
+					</div>
+					{#if sceneContext}
+						<div
+							class="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs dark:border-violet-900 dark:bg-violet-950/40"
+						>
+							<span class="text-violet-800 dark:text-violet-200">
+								Scene imported from chat. The surrounding turns are passed to the prompt model so it
+								can describe the characters and setting from scratch.
+							</span>
+							<span class="ml-auto flex shrink-0 gap-3">
+								{#if sceneChatId}
+									<a
+										class="font-medium text-violet-800 hover:underline dark:text-violet-200"
+										href="/c/{sceneChatId}">Back to chat</a
 									>
-								</div>
-							{/if}
-							<div
-								class="grid grid-cols-2 gap-1 rounded-xl bg-gray-100 p-1 sm:grid-cols-4 dark:bg-gray-850"
+								{/if}
+								<button
+									class="font-medium text-violet-800 hover:underline dark:text-violet-200"
+									on:click={clearSceneContext}>Drop context</button
+								>
+							</span>
+						</div>
+					{/if}
+					{#if continuationSource}
+						<div
+							class="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs dark:border-blue-900 dark:bg-blue-950/40"
+						>
+							<span class="text-blue-800 dark:text-blue-200">
+								Continuing from a {continuationSource.duration}s clip. Its final frame is the
+								starting image and its brief is passed to the prompt model as context, so describe
+								only what happens next.
+							</span>
+							<button
+								class="ml-auto shrink-0 font-medium text-blue-800 hover:underline dark:text-blue-200"
+								on:click={clearContinuation}>Start fresh instead</button
 							>
-								{#each [{ id: 'text', label: 'Text' }, { id: 'first', label: 'Image' }, { id: 'first-last', label: 'First + last' }, { id: 'reference', label: 'Reference' }] as item}
+						</div>
+					{/if}
+					<div
+						class="grid grid-cols-2 gap-1 rounded-xl bg-gray-100 p-1 sm:grid-cols-4 dark:bg-gray-850"
+					>
+						{#each [{ id: 'text', label: 'Text' }, { id: 'first', label: 'Image' }, { id: 'first-last', label: 'First + last' }, { id: 'reference', label: 'Reference' }] as item}
+							<button
+								class="rounded-lg px-2 py-2 text-sm transition {workflowMode === item.id
+									? 'bg-white font-medium shadow-sm dark:bg-gray-700'
+									: 'text-gray-500 hover:text-gray-900 dark:hover:text-white'}"
+								on:click={() => selectMode(item.id as WorkflowMode)}
+							>
+								{item.label}
+							</button>
+						{/each}
+					</div>
+					{#if workflowMode === 'first' || workflowMode === 'first-last'}
+						<div class="mt-4 grid gap-3 {workflowMode === 'first-last' ? 'sm:grid-cols-2' : ''}">
+							{#each workflowMode === 'first-last' ? [{ role: 'first', label: 'First frame', frame: firstFrame }, { role: 'last', label: 'Last frame', frame: lastFrame }] : [{ role: 'first', label: continuationSource ? 'Final frame of the previous clip' : 'Starting image', frame: firstFrame }] as slot}
+								<div>
+									<div class="mb-1.5 text-xs font-medium text-gray-600 dark:text-gray-300">
+										{slot.label}
+									</div>
 									<button
-										class="rounded-lg px-2 py-2 text-sm transition {workflowMode === item.id
-											? 'bg-white font-medium shadow-sm dark:bg-gray-700'
-											: 'text-gray-500 hover:text-gray-900 dark:hover:text-white'}"
-										on:click={() => selectMode(item.id as WorkflowMode)}
+										class="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-xl border border-dashed border-gray-300 bg-gray-50 text-sm text-gray-500 hover:border-gray-500 dark:border-gray-700 dark:bg-gray-900"
+										on:click={() =>
+											slot.role === 'first' ? firstFileInput.click() : lastFileInput.click()}
+										on:drop={(event) => handleDrop(event, slot.role as FrameRole)}
+										on:dragover|preventDefault
 									>
-										{item.label}
-									</button>
-								{/each}
-							</div>
-							{#if workflowMode === 'first' || workflowMode === 'first-last'}
-								<div
-									class="mt-4 grid gap-3 {workflowMode === 'first-last' ? 'sm:grid-cols-2' : ''}"
-								>
-									{#each workflowMode === 'first-last' ? [{ role: 'first', label: 'First frame', frame: firstFrame }, { role: 'last', label: 'Last frame', frame: lastFrame }] : [{ role: 'first', label: continuationSource ? 'Final frame of the previous clip' : 'Starting image', frame: firstFrame }] as slot}
-										<div>
-											<div class="mb-1.5 text-xs font-medium text-gray-600 dark:text-gray-300">
-												{slot.label}
-											</div>
-											<button
-												class="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-xl border border-dashed border-gray-300 bg-gray-50 text-sm text-gray-500 hover:border-gray-500 dark:border-gray-700 dark:bg-gray-900"
-												on:click={() =>
-													slot.role === 'first' ? firstFileInput.click() : lastFileInput.click()}
-												on:drop={(event) => handleDrop(event, slot.role as FrameRole)}
-												on:dragover|preventDefault
+										{#if slot.frame}
+											<img
+												src={slot.frame.dataUrl}
+												alt={slot.label}
+												class="absolute inset-0 size-full object-contain"
+											/>
+											<span
+												class="absolute bottom-2 left-2 rounded-md bg-black/70 px-2 py-1 text-xs text-white"
 											>
-												{#if slot.frame}
-													<img
-														src={slot.frame.dataUrl}
-														alt={slot.label}
-														class="absolute inset-0 size-full object-contain"
-													/>
-													<span
-														class="absolute bottom-2 left-2 rounded-md bg-black/70 px-2 py-1 text-xs text-white"
-													>
-														{slot.frame.width}x{slot.frame.height}
-													</span>
-												{:else}
-													<span>Drop an image or click to browse</span>
-												{/if}
-											</button>
+												{slot.frame.width}x{slot.frame.height}
+											</span>
+										{:else}
+											<span>Drop an image or click to browse</span>
+										{/if}
+									</button>
+								</div>
+							{/each}
+						</div>
+						<input
+							class="hidden"
+							type="file"
+							accept="image/png,image/jpeg,image/webp"
+							bind:this={firstFileInput}
+							on:change={(event) => handleFileInput(event, 'first')}
+						/>
+						<input
+							class="hidden"
+							type="file"
+							accept="image/png,image/jpeg,image/webp"
+							bind:this={lastFileInput}
+							on:change={(event) => handleFileInput(event, 'last')}
+						/>
+						<p class="mt-2 text-xs text-gray-500">
+							Frame pixels go only to the ComfyUI generation workflow. The prompt model receives
+							filename, dimensions, type, size, and frame role.
+						</p>
+					{/if}
+					{#if workflowMode === 'reference'}
+						<div class="mt-4">
+							<div class="mb-1.5 flex items-center justify-between gap-3">
+								<div class="text-xs font-medium text-gray-600 dark:text-gray-300">
+									Reference images
+								</div>
+								<div class="text-xs text-gray-500">{referenceImages.length}/9</div>
+							</div>
+							<button
+								class="flex min-h-24 w-full items-center justify-center rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 text-sm text-gray-500 hover:border-gray-500 dark:border-gray-700 dark:bg-gray-900"
+								on:click={() => referenceFileInput.click()}
+								on:drop={handleReferenceDrop}
+								on:dragover|preventDefault
+							>
+								Drop reference images or click to browse
+							</button>
+							<input
+								class="hidden"
+								type="file"
+								multiple
+								accept="image/png,image/jpeg,image/webp"
+								bind:this={referenceFileInput}
+								on:change={handleReferenceInput}
+							/>
+							{#if referenceImages.length}
+								<div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+									{#each referenceImages as image, index}
+										<div
+											class="relative overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700"
+										>
+											<img
+												src={image.dataUrl}
+												alt={`Picture ${index + 1}`}
+												class="aspect-video w-full object-contain"
+											/>
+											<div
+												class="flex items-center gap-2 border-t border-gray-200 px-2 py-1.5 text-xs dark:border-gray-700"
+											>
+												<span class="min-w-0 flex-1 truncate">&lt;Picture {index + 1}&gt;</span>
+												<button
+													class="shrink-0 text-gray-500 hover:text-red-600"
+													aria-label={`Remove Picture ${index + 1}`}
+													on:click={() => removeReferenceImage(index)}>Remove</button
+												>
+											</div>
 										</div>
 									{/each}
 								</div>
-								<input
-									class="hidden"
-									type="file"
-									accept="image/png,image/jpeg,image/webp"
-									bind:this={firstFileInput}
-									on:change={(event) => handleFileInput(event, 'first')}
-								/>
-								<input
-									class="hidden"
-									type="file"
-									accept="image/png,image/jpeg,image/webp"
-									bind:this={lastFileInput}
-									on:change={(event) => handleFileInput(event, 'last')}
-								/>
-								<p class="mt-2 text-xs text-gray-500">
-									Frame pixels go only to the ComfyUI generation workflow. The prompt model receives
-									filename, dimensions, type, size, and frame role.
-								</p>
 							{/if}
-							{#if workflowMode === 'reference'}
-								<div class="mt-4">
-									<div class="mb-1.5 flex items-center justify-between gap-3">
-										<div class="text-xs font-medium text-gray-600 dark:text-gray-300">
-											Reference images
-										</div>
-										<div class="text-xs text-gray-500">{referenceImages.length}/9</div>
-									</div>
-									<button
-										class="flex min-h-24 w-full items-center justify-center rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 text-sm text-gray-500 hover:border-gray-500 dark:border-gray-700 dark:bg-gray-900"
-										on:click={() => referenceFileInput.click()}
-										on:drop={handleReferenceDrop}
-										on:dragover|preventDefault
-									>
-										Drop reference images or click to browse
-									</button>
-									<input
-										class="hidden"
-										type="file"
-										multiple
-										accept="image/png,image/jpeg,image/webp"
-										bind:this={referenceFileInput}
-										on:change={handleReferenceInput}
-									/>
-									{#if referenceImages.length}
-										<div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
-											{#each referenceImages as image, index}
-												<div
-													class="relative overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700"
-												>
-													<img
-														src={image.dataUrl}
-														alt={`Picture ${index + 1}`}
-														class="aspect-video w-full object-contain"
-													/>
-													<div
-														class="flex items-center gap-2 border-t border-gray-200 px-2 py-1.5 text-xs dark:border-gray-700"
-													>
-														<span class="min-w-0 flex-1 truncate">&lt;Picture {index + 1}&gt;</span>
-														<button
-															class="shrink-0 text-gray-500 hover:text-red-600"
-															aria-label={`Remove Picture ${index + 1}`}
-															on:click={() => removeReferenceImage(index)}>Remove</button
-														>
-													</div>
-												</div>
-											{/each}
-										</div>
-									{/if}
-									<p class="mt-2 text-xs text-gray-500">
-										Order matters: images are connected to Ref2VA as Picture 1 through Picture 9.
-										Pixels go only to ComfyUI; the prompt model receives metadata and labels.
-									</p>
-								</div>
-							{/if}
-						</section>
-
-						<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
-							<div class="mb-3 flex items-center justify-between gap-3">
-								<div>
-									<h2 class="font-semibold">1. Creative direction</h2>
-									<p class="mt-0.5 text-xs text-gray-500">Plain-language ideas are enough.</p>
-								</div>
-								<div class="w-64 max-w-[50%]">
-									<Selector
-										placeholder="Select a prompt model"
-										items={availableModels.map((model) => ({
-											value: model.id,
-											label: model.name,
-											model
-										}))}
-										bind:value={selectedModelId}
-										className="w-full"
-										triggerClassName="text-sm"
-									/>
-								</div>
-							</div>
-							<textarea
-								class="min-h-32 w-full resize-y rounded-xl border border-gray-200 bg-transparent p-3 text-sm outline-none focus:border-gray-500 dark:border-gray-700"
-								placeholder="Example: A rain-soaked detective pauses under a flickering neon sign, hears footsteps behind her, then turns toward camera. Slow handheld push-in, realistic night ambience, no captions."
-								bind:value={creativeDirection}
-								on:input={markPromptForReview}
-							></textarea>
-							<div class="mt-3 flex justify-end">
-								<button
-									class="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
-									disabled={drafting || !selectedModelId || !creativeDirection.trim()}
-									on:click={draftPrompt}
-								>
-									{drafting
-										? 'Drafting prompt...'
-										: productionPrompt
-											? 'Redraft H3 prompt'
-											: 'Draft H3 prompt'}
-								</button>
-							</div>
-						</section>
-
-						<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
-							<div class="mb-3 flex items-center justify-between">
-								<div>
-									<h2 class="font-semibold">2. Review the production prompt</h2>
-									<p class="mt-0.5 text-xs text-gray-500">
-										Edit anything you want. Edits require approval again.
-									</p>
-								</div>
-								<span
-									class="rounded-full px-2.5 py-1 text-xs {promptApproved
-										? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300'
-										: 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'}"
-								>
-									{promptApproved ? 'Approved' : 'Needs approval'}
-								</span>
-							</div>
-							<textarea
-								class="min-h-80 w-full resize-y rounded-xl border border-gray-200 bg-transparent p-3 font-mono text-xs leading-5 outline-none focus:border-gray-500 dark:border-gray-700"
-								placeholder="The generated MiniMax H3 production brief will appear here. You can also write one directly."
-								bind:value={productionPrompt}
-								on:input={markPromptForReview}
-							></textarea>
-							<div class="mt-3 flex justify-end">
-								<button
-									class="rounded-xl border border-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-850"
-									disabled={!productionPrompt.trim()}
-									on:click={approvePrompt}
-								>
-									{promptApproved ? 'Prompt approved' : 'Approve this prompt'}
-								</button>
-							</div>
-						</section>
-					</main>
-
-					<aside
-						class="h-fit rounded-2xl border border-gray-200 p-4 dark:border-gray-800 lg:sticky lg:top-4"
-					>
-						<h2 class="font-semibold">3. Generation settings</h2>
-						<div class="mt-4 space-y-4">
-							<label class="block">
-								<span class="mb-1.5 block text-xs font-medium">Aspect ratio</span>
-								<select
-									class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
-									bind:value={aspectRatio}
-									on:change={markPromptForReview}
-								>
-									<option value="16:9">16:9 landscape</option>
-									<option value="9:16">9:16 portrait</option>
-									<option value="1:1">1:1 square</option>
-								</select>
-							</label>
-							<label class="block">
-								<span class="mb-1.5 block text-xs font-medium">Resolution budget</span>
-								<select
-									class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
-									bind:value={megapixels}
-								>
-									<option value={0.2}>0.2 MP - faster</option>
-									<option value={0.4}>0.4 MP - sharper</option>
-								</select>
-							</label>
-							<label class="block">
-								<span class="mb-1.5 block text-xs font-medium">Duration</span>
-								<select
-									class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
-									bind:value={duration}
-									on:change={markPromptForReview}
-								>
-									<option value={3}>3 seconds</option>
-									<option value={5}>5 seconds</option>
-									<option value={10}>10 seconds</option>
-								</select>
-							</label>
-							<div>
-								<div class="mb-1.5 flex items-center justify-between text-xs font-medium">
-									<label for="video-seed">Seed</label>
-									<button
-										class="font-normal text-gray-500 hover:underline disabled:opacity-40"
-										disabled={seed === null || seed === ''}
-										on:click={() => (seed = '')}
-									>
-										Clear for random
-									</button>
-								</div>
-								<input
-									id="video-seed"
-									class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
-									type="number"
-									min="0"
-									step="1"
-									placeholder="Random"
-									bind:value={seed}
-								/>
-								<p class="mt-1.5 text-xs text-gray-500">
-									Leave this blank to let each generation pick a new random seed.
-								</p>
-							</div>
+							<p class="mt-2 text-xs text-gray-500">
+								Order matters: images are connected to Ref2VA as Picture 1 through Picture 9. Pixels
+								go only to ComfyUI; the prompt model receives metadata and labels.
+							</p>
 						</div>
+					{/if}
+				</section>
+
+				<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+					<h2 class="font-semibold">1. Generation settings</h2>
+					<div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:items-start">
+						<label class="block">
+							<span class="mb-1.5 block text-xs font-medium">Aspect ratio</span>
+							<select
+								class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
+								bind:value={aspectRatio}
+								on:change={markPromptForReview}
+							>
+								<option value="16:9">16:9 landscape</option>
+								<option value="9:16">9:16 portrait</option>
+								<option value="1:1">1:1 square</option>
+							</select>
+						</label>
+						<label class="block">
+							<span class="mb-1.5 block text-xs font-medium">Resolution budget</span>
+							<select
+								class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
+								bind:value={megapixels}
+							>
+								<option value={0.2}>0.2 MP - faster</option>
+								<option value={0.4}>0.4 MP - sharper</option>
+							</select>
+						</label>
+						<label class="block">
+							<span class="mb-1.5 block text-xs font-medium">Duration</span>
+							<select
+								class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
+								bind:value={duration}
+								on:change={markPromptForReview}
+							>
+								<option value={3}>3 seconds</option>
+								<option value={5}>5 seconds</option>
+								<option value={10}>10 seconds</option>
+								<option value={15}>15 seconds</option>
+							</select>
+						</label>
+						<div>
+							<div class="mb-1.5 flex items-center justify-between text-xs font-medium">
+								<label for="video-seed">Seed</label>
+								<button
+									class="font-normal text-gray-500 hover:underline disabled:opacity-40"
+									disabled={seed === null || seed === ''}
+									on:click={() => (seed = '')}
+								>
+									Clear for random
+								</button>
+							</div>
+							<input
+								id="video-seed"
+								class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
+								type="number"
+								min="0"
+								step="1"
+								placeholder="Random"
+								bind:value={seed}
+							/>
+							<p class="mt-1.5 text-xs text-gray-500">
+								Leave this blank to let each generation pick a new random seed.
+							</p>
+						</div>
+					</div>
+				</section>
+
+				<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+					<div class="mb-3 flex items-center justify-between gap-3">
+						<div>
+							<h2 class="font-semibold">2. Creative direction</h2>
+							<p class="mt-0.5 text-xs text-gray-500">Plain-language ideas are enough.</p>
+						</div>
+						<div class="w-64 max-w-[50%]">
+							<Selector
+								placeholder="Select a prompt model"
+								items={availableModels.map((model) => ({
+									value: model.id,
+									label: model.name,
+									model
+								}))}
+								bind:value={selectedModelId}
+								className="w-full"
+								triggerClassName="text-sm"
+							/>
+						</div>
+					</div>
+					<textarea
+						class="min-h-32 w-full resize-y rounded-xl border border-gray-200 bg-transparent p-3 text-sm outline-none focus:border-gray-500 dark:border-gray-700"
+						placeholder="Example: A rain-soaked detective pauses under a flickering neon sign, hears footsteps behind her, then turns toward camera. Slow handheld push-in, realistic night ambience, no captions."
+						bind:value={creativeDirection}
+						on:input={markPromptForReview}
+					></textarea>
+					<div class="mt-3 flex justify-end">
 						<button
-							class="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
-							disabled={generating || !promptApproved || !framesReady}
-							on:click={generateVideo}
+							class="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
+							disabled={drafting || !selectedModelId || !creativeDirection.trim()}
+							on:click={draftPrompt}
 						>
-							<VideoCamera className="size-4.5" strokeWidth="2" />
-							{generating ? `Generating... ${elapsedSeconds}s` : 'Generate video'}
+							{drafting
+								? 'Drafting prompt...'
+								: productionPrompt
+									? 'Redraft H3 prompt'
+									: 'Draft H3 prompt'}
 						</button>
-						{#if generating}
-							<p class="mt-2 text-center text-xs text-gray-500">
-								ComfyUI is rendering in the background. You can lock your phone or return later;
-								Video Studio will reconnect to this job.
-							</p>
-						{:else if !framesReady}
-							<p class="mt-2 text-center text-xs text-amber-600">
-								Attach the required frame images.
-							</p>
-						{:else if !promptApproved}
-							<p class="mt-2 text-center text-xs text-gray-500">
-								Approve the production prompt to continue.
-							</p>
-						{/if}
-						<div
-							class="mt-5 border-t border-gray-200 pt-4 text-xs leading-5 text-gray-500 dark:border-gray-800"
-						>
-							<p>
-								Reference mode uses the dedicated Ref2VA model and supports up to 9 ordered images.
-							</p>
-							<p class="mt-2">
-								The normal chat pipeline remains text-only for video generation; frame and reference
-								workflows live only in this studio.
+					</div>
+				</section>
+
+				<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+					<div class="mb-3 flex items-center justify-between">
+						<div>
+							<h2 class="font-semibold">3. Review the production prompt</h2>
+							<p class="mt-0.5 text-xs text-gray-500">
+								Edit anything you want. Edits require approval again.
 							</p>
 						</div>
-					</aside>
-				</div>
+						<span
+							class="rounded-full px-2.5 py-1 text-xs {promptApproved
+								? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300'
+								: 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'}"
+						>
+							{promptApproved ? 'Approved' : 'Needs approval'}
+						</span>
+					</div>
+					<textarea
+						class="min-h-80 w-full resize-y rounded-xl border border-gray-200 bg-transparent p-3 font-mono text-xs leading-5 outline-none focus:border-gray-500 dark:border-gray-700"
+						placeholder="The generated MiniMax H3 production brief will appear here. You can also write one directly."
+						bind:value={productionPrompt}
+						on:input={markPromptForReview}
+					></textarea>
+					<div class="mt-3 flex justify-end">
+						<button
+							class="rounded-xl border border-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-850"
+							disabled={!productionPrompt.trim()}
+							on:click={approvePrompt}
+						>
+							{promptApproved ? 'Prompt approved' : 'Approve this prompt'}
+						</button>
+					</div>
+				</section>
+
+				<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+					<h2 class="font-semibold">4. Generate</h2>
+					<button
+						class="mt-4 flex w-full max-w-sm items-center justify-center gap-2 rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
+						disabled={generating || !promptApproved || !framesReady}
+						on:click={generateVideo}
+					>
+						<VideoCamera className="size-4.5" strokeWidth="2" />
+						{generating ? `Generating... ${elapsedSeconds}s` : 'Generate video'}
+					</button>
+					{#if generating}
+						<p class="mt-2 text-xs text-gray-500">
+							ComfyUI is rendering in the background. You can lock your phone or return later; Video
+							Studio will reconnect to this job.
+						</p>
+					{:else if !framesReady}
+						<p class="mt-2 text-xs text-amber-600">Attach the required frame images.</p>
+					{:else if !promptApproved}
+						<p class="mt-2 text-xs text-gray-500">Approve the production prompt to continue.</p>
+					{/if}
+					<div
+						class="mt-5 border-t border-gray-200 pt-4 text-xs leading-5 text-gray-500 dark:border-gray-800"
+					>
+						<p>
+							Reference mode uses the dedicated Ref2VA model and supports up to 9 ordered images.
+						</p>
+						<p class="mt-2">
+							The normal chat pipeline remains text-only for video generation; frame and reference
+							workflows live only in this studio.
+						</p>
+					</div>
+				</section>
 
 				<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
 					<div class="mb-3 flex items-center justify-between gap-3">
