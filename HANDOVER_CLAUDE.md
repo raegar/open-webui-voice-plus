@@ -89,7 +89,7 @@ Generation:
 POST /api/v1/videos/generations
 ```
 
-Form fields include `prompt`, `mode` (`text`, `image`, or `first-last`), `aspect_ratio`, `megapixels` (`0.2` or `0.4`), `duration` (`3`, `5`, or `10`), `seed`, optional `first_frame_data_url`, optional `last_frame_data_url`, and optional chat/message IDs.
+Form fields include `prompt`, `mode` (`text` or `reference`), `aspect_ratio`, `megapixels` (`0.2` or `0.4`), `duration` (`3`, `5`, `10`, or `15`), `seed`, optional `first_frame_data_url`, optional `last_frame_data_url`, ordered `reference_image_data_urls`, and optional chat/message IDs. First-frame and first/last-frame workflows use `mode=text` and are inferred from the supplied frame fields.
 
 Image data URLs are validated as PNG/JPEG/WebP and capped at 25 MB. A last frame requires a first frame. Raw data URLs are never written to generation metadata. Stored metadata includes prompt, mode, dimensions/settings, seed, frame-presence flags, and ownership.
 
@@ -106,9 +106,12 @@ History:
 
 ```text
 GET /api/v1/videos/history?limit=50
+DELETE /api/v1/files/{file_id}
 ```
 
 `limit` is 1–100. Results come from `Files.get_files_by_user_id(user.id)`, so history is strictly user-scoped even for admins. The backend filters video files whose nested `meta.data` contains a generation prompt, returns newest first, and includes file ID/URL/name/type plus prompt, mode, aspect, megapixels, duration, seed, frame flags, and `created_at`.
+
+Video Studio exposes permanent deletion on each history card behind a confirmation dialog. It deliberately uses OWUI's existing authenticated file endpoint, which enforces owner/admin/write access and removes both the file record and stored MP4.
 
 The seed is returned as a string. JavaScript-safe random seeds are generated in `[0, 2**53 - 1]`; this avoids regeneration failures caused by unsafe or malformed values. Omitting `seed` entirely makes the backend pick a fresh random one.
 
@@ -247,7 +250,6 @@ Never use `docker rm -v` here: the `open-webui` volume contains user data. Plain
 
 - Reference mode currently supports images only. The underlying node also supports reference video and audio, but those upload and loader paths are not exposed in Video Studio yet.
 - Active job status survives browser suspension but not an OWUI container restart; completed MP4s remain persistent. A durable database/Redis job table would remove this limitation.
-- History currently returns the newest 50 items by default and has no delete/management UI.
 - Uploaded source frames are used by the workflow but are not persisted as OWUI files for later re-editing.
 - Prompt drafting intentionally sends image metadata, never image bytes, to the selected chat model.
 - Add/expand mocked router tests and a stable authenticated history test if changing metadata or access control.

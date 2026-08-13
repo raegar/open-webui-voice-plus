@@ -4,6 +4,7 @@
 	import { toast } from 'svelte-sonner';
 
 	import { generateOpenAIChatCompletion } from '$lib/apis/openai';
+	import { deleteFileById } from '$lib/apis/files';
 	import {
 		getVideoGenerationJob,
 		getVideoHistory,
@@ -11,6 +12,7 @@
 		type VideoGenerationOptions
 	} from '$lib/apis/videos';
 	import Selector from '$lib/components/chat/ModelSelector/Selector.svelte';
+	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Sidebar from '$lib/components/icons/Sidebar.svelte';
 	import VideoCamera from '$lib/components/icons/VideoCamera.svelte';
@@ -98,6 +100,9 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	let scrollContainer: HTMLDivElement;
 	let firstFileInput: HTMLInputElement;
 	let historyLoading = false;
+	let showDeleteVideoConfirm = false;
+	let videoPendingDeletion: GeneratedVideo | null = null;
+	let deletingVideoId: string | null = null;
 	let lastFileInput: HTMLInputElement;
 	let referenceFileInput: HTMLInputElement;
 	let elapsedTimer: ReturnType<typeof setInterval> | null = null;
@@ -723,6 +728,33 @@ Write the final MiniMax H3 production brief now.`
 		}
 	};
 
+	const requestVideoDeletion = (video: GeneratedVideo) => {
+		if (!video.id) {
+			toast.error('This video cannot be deleted because its file record is unavailable.');
+			return;
+		}
+		videoPendingDeletion = video;
+		showDeleteVideoConfirm = true;
+	};
+
+	const deleteHistoryVideo = async () => {
+		const video = videoPendingDeletion;
+		videoPendingDeletion = null;
+		if (!video?.id) return;
+
+		deletingVideoId = video.id;
+		try {
+			await deleteFileById(localStorage.token, video.id);
+			videoHistory = videoHistory.filter((item) => item.id !== video.id);
+			if (currentVideo?.id === video.id) currentVideo = null;
+			toast.success('Video deleted permanently.');
+		} catch (error) {
+			toast.error(`The video could not be deleted: ${error}`);
+		} finally {
+			deletingVideoId = null;
+		}
+	};
+
 	onMount(async () => {
 		if (!canUseVideo) {
 			await goto('/');
@@ -749,6 +781,14 @@ Write the final MiniMax H3 production brief now.`
 		stopElapsedTimer();
 	});
 </script>
+
+<ConfirmDialog
+	bind:show={showDeleteVideoConfirm}
+	title="Delete generated video?"
+	message="This permanently removes the video file from your OWUI storage. This action cannot be undone."
+	confirmLabel="Delete video"
+	onConfirm={deleteHistoryVideo}
+/>
 
 <svelte:head>
 	<title>Video Studio - {$WEBUI_NAME}</title>
@@ -1237,6 +1277,12 @@ Write the final MiniMax H3 production brief now.`
 											<button
 												class="font-medium text-gray-800 hover:underline dark:text-gray-200"
 												on:click={() => downloadVideo(video)}>Download</button
+											>
+											<button
+												class="font-medium text-red-600 hover:underline disabled:opacity-40 dark:text-red-400"
+												disabled={!video.id || deletingVideoId === video.id}
+												on:click={() => requestVideoDeletion(video)}
+												>{deletingVideoId === video.id ? 'Deleting...' : 'Delete'}</button
 											>
 										</div>
 									</div>
