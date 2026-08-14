@@ -218,11 +218,22 @@ def _verify_owns_files(user, file_ids: list[str]) -> None:
 @router.get("/characters")
 async def list_video_characters(
     request: Request,
-    chat_id: str = Query(...),
     user=Depends(get_verified_user),
 ):
+    """The caller's whole character library."""
     _check_video_access(request, user)
-    return VideoCharacters.get_by_chat_id(user.id, chat_id)
+    return VideoCharacters.get_library(user.id)
+
+
+@router.get("/characters/chat/{chat_id}")
+async def list_chat_video_characters(
+    request: Request,
+    chat_id: str,
+    user=Depends(get_verified_user),
+):
+    """Only the characters attached to this chat, in attachment order."""
+    _check_video_access(request, user)
+    return VideoCharacters.get_for_chat(user.id, chat_id)
 
 
 @router.post("/characters")
@@ -234,6 +245,31 @@ async def create_video_character(
     _check_video_access(request, user)
     _verify_owns_files(user, form_data.image_file_ids)
     return VideoCharacters.insert(user.id, form_data)
+
+
+@router.post("/characters/chat/{chat_id}/attach/{character_id}")
+async def attach_video_character(
+    request: Request,
+    chat_id: str,
+    character_id: str,
+    user=Depends(get_verified_user),
+):
+    _check_video_access(request, user)
+    if not VideoCharacters.attach(user.id, chat_id, character_id):
+        raise HTTPException(status_code=404, detail="Character not found")
+    return {"attached": True}
+
+
+@router.delete("/characters/chat/{chat_id}/attach/{character_id}")
+async def detach_video_character(
+    request: Request,
+    chat_id: str,
+    character_id: str,
+    user=Depends(get_verified_user),
+):
+    _check_video_access(request, user)
+    VideoCharacters.detach(user.id, chat_id, character_id)
+    return {"detached": True}
 
 
 @router.post("/characters/{character_id}")
@@ -262,7 +298,6 @@ async def delete_video_character(
     if not VideoCharacters.delete(user.id, character_id):
         raise HTTPException(status_code=404, detail="Character not found")
     return {"deleted": True}
-
 
 
 async def video_generations(

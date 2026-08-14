@@ -27,7 +27,7 @@
 	} from '$lib/stores';
 	import { synthesizeOpenAISpeech } from '$lib/apis/audio';
 	import { imageGenerations } from '$lib/apis/images';
-	import { getVideoCharacters, videoGenerations } from '$lib/apis/videos';
+	import { getChatVideoCharacters, videoGenerations } from '$lib/apis/videos';
 	import {
 		copyToClipboard as _copyToClipboard,
 		approximateToHumanReadable,
@@ -282,7 +282,7 @@
 		let characters = [];
 		if (chatId) {
 			try {
-				characters = (await getVideoCharacters(localStorage.token, chatId))
+				characters = (await getChatVideoCharacters(localStorage.token, chatId))
 					.filter((character) => (character?.image_file_ids ?? []).length > 0)
 					.map((character) => ({
 						name: character.name,

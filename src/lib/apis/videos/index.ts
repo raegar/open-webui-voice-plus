@@ -148,11 +148,9 @@ export const videoGenerations = async (
 
 export type VideoCharacter = {
 	id: string;
-	chat_id: string;
 	name: string;
 	description: string;
 	image_file_ids: string[];
-	position: number;
 };
 
 const videoCharacterRequest = async (token: string, path: string, init: RequestInit = {}) => {
@@ -178,15 +176,20 @@ const videoCharacterRequest = async (token: string, path: string, init: RequestI
 	return res;
 };
 
-export const getVideoCharacters = async (
+/** The caller's whole character library. */
+export const getVideoCharacterLibrary = async (token: string): Promise<VideoCharacter[]> =>
+	(await videoCharacterRequest(token, '/characters')) ?? [];
+
+/** Only the characters attached to one chat, in attachment order. */
+export const getChatVideoCharacters = async (
 	token: string,
 	chatId: string
 ): Promise<VideoCharacter[]> =>
-	(await videoCharacterRequest(token, `/characters?chat_id=${encodeURIComponent(chatId)}`)) ?? [];
+	(await videoCharacterRequest(token, `/characters/chat/${encodeURIComponent(chatId)}`)) ?? [];
 
 export const createVideoCharacter = async (
 	token: string,
-	character: { chat_id: string; name: string; description: string; image_file_ids: string[] }
+	character: { name: string; description: string; image_file_ids: string[] }
 ): Promise<VideoCharacter> =>
 	await videoCharacterRequest(token, '/characters', {
 		method: 'POST',
@@ -205,3 +208,17 @@ export const updateVideoCharacter = async (
 
 export const deleteVideoCharacter = async (token: string, id: string) =>
 	await videoCharacterRequest(token, `/characters/${id}`, { method: 'DELETE' });
+
+export const attachVideoCharacter = async (token: string, chatId: string, characterId: string) =>
+	await videoCharacterRequest(
+		token,
+		`/characters/chat/${encodeURIComponent(chatId)}/attach/${characterId}`,
+		{ method: 'POST' }
+	);
+
+export const detachVideoCharacter = async (token: string, chatId: string, characterId: string) =>
+	await videoCharacterRequest(
+		token,
+		`/characters/chat/${encodeURIComponent(chatId)}/attach/${characterId}`,
+		{ method: 'DELETE' }
+	);
