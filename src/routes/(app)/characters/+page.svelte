@@ -19,6 +19,9 @@
 	import { config, mobile, showSidebar, user, WEBUI_NAME } from '$lib/stores';
 
 	const MAX_IMAGES_PER_CHARACTER = 3;
+	// Mirrors the max_length on VideoCharacterForm; exceeding it is a 422 from the API.
+	const MAX_DESCRIPTION = 4000;
+	const MAX_NAME = 200;
 
 	let loaded = false;
 	let loading = false;
@@ -28,6 +31,7 @@
 	let busyId: string | null = null;
 	let fileInput: HTMLInputElement;
 	let uploadTargetId: string | null = null;
+	let descriptionDrafts: Record<string, string> = {};
 	let pendingDeletion: VideoCharacter | null = null;
 	let showDeleteConfirm = false;
 
@@ -78,9 +82,27 @@
 			characters = [...characters];
 			return;
 		}
+		// Refuse over-length edits here rather than letting the API answer with a 422.
+		// The draft is kept so the text stays on screen to be trimmed.
+		if (key === 'name' && (patch.name ?? '').length > MAX_NAME) {
+			toast.error(
+				`Name is ${(patch.name ?? '').length - MAX_NAME} characters over the ${MAX_NAME} limit.`
+			);
+			return;
+		}
+		if (key === 'description' && (patch.description ?? '').length > MAX_DESCRIPTION) {
+			toast.error(
+				`Description is ${(patch.description ?? '').length - MAX_DESCRIPTION} characters over the ${MAX_DESCRIPTION} limit. Trim it to save.`
+			);
+			return;
+		}
 		try {
 			const updated = await updateVideoCharacter(localStorage.token, character.id, patch);
 			characters = characters.map((c) => (c.id === updated.id ? updated : c));
+			if (key === 'description') {
+				const { [character.id]: _saved, ...rest } = descriptionDrafts;
+				descriptionDrafts = rest;
+			}
 		} catch (error) {
 			toast.error(`${error}`);
 		}
@@ -244,6 +266,8 @@
 				{:else}
 					<div class="grid gap-4 lg:grid-cols-2">
 						{#each characters as character (character.id)}
+							{@const draft = descriptionDrafts[character.id] ?? character.description}
+							{@const over = draft.length - MAX_DESCRIPTION}
 							<article class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
 								<div class="flex items-center gap-2">
 									<input
@@ -261,11 +285,24 @@
 								</div>
 
 								<textarea
-									class="mt-2 min-h-20 w-full resize-y rounded-xl border border-gray-200 bg-transparent p-2.5 text-sm outline-none focus:border-gray-500 dark:border-gray-700"
+									class="mt-2 min-h-20 w-full resize-y rounded-xl border bg-transparent p-2.5 text-sm outline-none {over >
+									0
+										? 'border-red-400 focus:border-red-500 dark:border-red-500'
+										: 'border-gray-200 focus:border-gray-500 dark:border-gray-700'}"
 									placeholder="Appearance: apparent age, build, skin tone, hair, clothing, distinguishing features."
-									value={character.description}
+									value={draft}
+									on:input={(e) => (descriptionDrafts[character.id] = e.currentTarget.value)}
 									on:blur={(e) => saveField(character, { description: e.currentTarget.value })}
 								></textarea>
+								<div
+									class="mt-1 text-right text-xs tabular-nums {over > 0
+										? 'font-medium text-red-500'
+										: over > -200
+											? 'text-amber-600'
+											: 'text-gray-500'}"
+								>
+									{draft.length}/{MAX_DESCRIPTION}{over > 0 ? ` — ${over} over` : ''}
+								</div>
 
 								<div class="mt-2 flex flex-wrap gap-2">
 									{#each character.image_file_ids as fileId (fileId)}
