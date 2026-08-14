@@ -15,6 +15,11 @@ from pydantic import BaseModel, Field
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.models.chats import Chats
 from open_webui.models.files import Files
+from open_webui.models.video_characters import (
+    VideoCharacterForm,
+    VideoCharacterUpdateForm,
+    VideoCharacters,
+)
 from open_webui.routers.files import upload_file_handler
 from open_webui.utils.access_control import has_permission
 from open_webui.utils.auth import get_verified_user
@@ -199,6 +204,64 @@ async def get_video_history(
 ):
     _check_video_access(request, user)
     return _get_video_history_items(request, user, limit)
+
+
+def _verify_owns_files(user, file_ids: list[str]) -> None:
+    """Reject file ids the caller does not own, so a roster cannot reference
+    another user's uploads and surface them through the studio."""
+    for file_id in file_ids:
+        file_item = Files.get_file_by_id(file_id)
+        if not file_item or file_item.user_id != user.id:
+            raise HTTPException(status_code=400, detail="Unknown reference image")
+
+
+@router.get("/characters")
+async def list_video_characters(
+    request: Request,
+    chat_id: str = Query(...),
+    user=Depends(get_verified_user),
+):
+    _check_video_access(request, user)
+    return VideoCharacters.get_by_chat_id(user.id, chat_id)
+
+
+@router.post("/characters")
+async def create_video_character(
+    request: Request,
+    form_data: VideoCharacterForm,
+    user=Depends(get_verified_user),
+):
+    _check_video_access(request, user)
+    _verify_owns_files(user, form_data.image_file_ids)
+    return VideoCharacters.insert(user.id, form_data)
+
+
+@router.post("/characters/{character_id}")
+async def update_video_character(
+    request: Request,
+    character_id: str,
+    form_data: VideoCharacterUpdateForm,
+    user=Depends(get_verified_user),
+):
+    _check_video_access(request, user)
+    if form_data.image_file_ids is not None:
+        _verify_owns_files(user, form_data.image_file_ids)
+    character = VideoCharacters.update(user.id, character_id, form_data)
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    return character
+
+
+@router.delete("/characters/{character_id}")
+async def delete_video_character(
+    request: Request,
+    character_id: str,
+    user=Depends(get_verified_user),
+):
+    _check_video_access(request, user)
+    if not VideoCharacters.delete(user.id, character_id):
+        raise HTTPException(status_code=404, detail="Character not found")
+    return {"deleted": True}
 
 
 

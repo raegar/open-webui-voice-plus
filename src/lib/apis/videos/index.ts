@@ -145,3 +145,63 @@ export const videoGenerations = async (
 		await new Promise((resolve) => setTimeout(resolve, 3000));
 	}
 };
+
+export type VideoCharacter = {
+	id: string;
+	chat_id: string;
+	name: string;
+	description: string;
+	image_file_ids: string[];
+	position: number;
+};
+
+const videoCharacterRequest = async (token: string, path: string, init: RequestInit = {}) => {
+	let error: string | null = null;
+	const res = await fetch(`${VIDEOS_API_BASE_URL}${path}`, {
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			...(token && { authorization: `Bearer ${token}` })
+		},
+		...init
+	})
+		.then(async (response) => {
+			if (!response.ok) throw await response.json();
+			return response.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = videoApiError(err);
+			return null;
+		});
+	if (error) throw error;
+	return res;
+};
+
+export const getVideoCharacters = async (
+	token: string,
+	chatId: string
+): Promise<VideoCharacter[]> =>
+	(await videoCharacterRequest(token, `/characters?chat_id=${encodeURIComponent(chatId)}`)) ?? [];
+
+export const createVideoCharacter = async (
+	token: string,
+	character: { chat_id: string; name: string; description: string; image_file_ids: string[] }
+): Promise<VideoCharacter> =>
+	await videoCharacterRequest(token, '/characters', {
+		method: 'POST',
+		body: JSON.stringify(character)
+	});
+
+export const updateVideoCharacter = async (
+	token: string,
+	id: string,
+	patch: { name?: string; description?: string; image_file_ids?: string[] }
+): Promise<VideoCharacter> =>
+	await videoCharacterRequest(token, `/characters/${id}`, {
+		method: 'POST',
+		body: JSON.stringify(patch)
+	});
+
+export const deleteVideoCharacter = async (token: string, id: string) =>
+	await videoCharacterRequest(token, `/characters/${id}`, { method: 'DELETE' });

@@ -20,6 +20,7 @@ COPY --from=builder /build/backend/open_webui/routers/auths.py /app/backend/open
 COPY --from=builder /build/backend/open_webui/routers/images.py /app/backend/open_webui/routers/images.py
 COPY --from=builder /build/backend/open_webui/routers/videos.py /app/backend/open_webui/routers/videos.py
 COPY --from=builder /build/backend/open_webui/utils/videos /app/backend/open_webui/utils/videos
+COPY --from=builder /build/backend/open_webui/models/video_characters.py /app/backend/open_webui/models/video_characters.py
 # Patch main.py — add REPLACE_EMDASH_WITH_SEMICOLON import and app.state assignment
 RUN sed -i 's/    RESPONSE_WATERMARK,$/    RESPONSE_WATERMARK,\n    REPLACE_EMDASH_WITH_SEMICOLON,/' /app/backend/open_webui/main.py
 RUN sed -i 's/app\.state\.config\.RESPONSE_WATERMARK = RESPONSE_WATERMARK/app.state.config.RESPONSE_WATERMARK = RESPONSE_WATERMARK\napp.state.config.REPLACE_EMDASH_WITH_SEMICOLON = REPLACE_EMDASH_WITH_SEMICOLON/' /app/backend/open_webui/main.py

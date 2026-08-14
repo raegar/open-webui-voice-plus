@@ -49,13 +49,14 @@
 			const msgs = Object.values(history.messages);
 			for (let i = msgs.length - 1; i >= 0; i--) {
 				const msgFiles = (msgs[i] as any)?.files ?? [];
-				const img = msgFiles.find((f: any) =>
-					f.type === "image" ||
-					(f?.content_type ?? "").startsWith("image/") ||
-					!!(f?.url ?? "").match(/\.(png|jpg|jpeg|webp|gif)/i)
+				const img = msgFiles.find(
+					(f: any) =>
+						f.type === 'image' ||
+						(f?.content_type ?? '').startsWith('image/') ||
+						!!(f?.url ?? '').match(/\.(png|jpg|jpeg|webp|gif)/i)
 				);
 				if (img?.url) {
-					console.log("[VoiceOverlay] found image:", img.url);
+					console.log('[VoiceOverlay] found image:', img.url);
 					return img.url;
 				}
 			}
@@ -388,7 +389,7 @@
 							{:else if activeTab === 'files' && codeInterpreterEnabled}
 								<PyodideFileNav />
 							{:else}
-								<Controls embed={true} {models} bind:chatFiles bind:params />
+								<Controls embed={true} {chatId} {models} bind:chatFiles bind:params />
 							{/if}
 						</div>
 					</div>
@@ -540,7 +541,7 @@
 								{:else if activeTab === 'files' && codeInterpreterEnabled}
 									<PyodideFileNav overlay={dragged} />
 								{:else}
-									<Controls embed={true} {models} bind:chatFiles bind:params />
+									<Controls embed={true} {chatId} {models} bind:chatFiles bind:params />
 								{/if}
 							</div>
 						</div>

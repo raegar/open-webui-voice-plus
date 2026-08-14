@@ -27,7 +27,7 @@
 	} from '$lib/stores';
 	import { synthesizeOpenAISpeech } from '$lib/apis/audio';
 	import { imageGenerations } from '$lib/apis/images';
-	import { videoGenerations } from '$lib/apis/videos';
+	import { getVideoCharacters, videoGenerations } from '$lib/apis/videos';
 	import {
 		copyToClipboard as _copyToClipboard,
 		approximateToHumanReadable,
@@ -277,6 +277,24 @@
 			.map((item) => ({ role: item.role, content: sceneText(item.content) }))
 			.filter((item) => item.content);
 
+		// Characters make the scene a Ref2VA generation. File ids travel rather than
+		// data URLs: sessionStorage would blow its quota on a few base64 images.
+		let characters = [];
+		if (chatId) {
+			try {
+				characters = (await getVideoCharacters(localStorage.token, chatId))
+					.filter((character) => (character?.image_file_ids ?? []).length > 0)
+					.map((character) => ({
+						name: character.name,
+						description: character.description,
+						imageFileIds: character.image_file_ids
+					}));
+			} catch (error) {
+				// A roster lookup failure must not block the scene; fall back to text-to-video.
+				console.error(error);
+			}
+		}
+
 		try {
 			sessionStorage.setItem(
 				SCENE_HANDOFF_KEY,
@@ -285,7 +303,8 @@
 					messageId,
 					modelId: message?.model ?? selectedModels?.[0] ?? '',
 					scene,
-					context
+					context,
+					characters
 				})
 			);
 		} catch (error) {

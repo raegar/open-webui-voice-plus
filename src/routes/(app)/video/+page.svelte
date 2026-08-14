@@ -17,6 +17,7 @@
 	import Sidebar from '$lib/components/icons/Sidebar.svelte';
 	import VideoCamera from '$lib/components/icons/VideoCamera.svelte';
 	import { config, mobile, models, settings, showSidebar, user, WEBUI_NAME } from '$lib/stores';
+	import { WEBUI_API_BASE_URL } from '$lib/constants';
 
 	type WorkflowMode = 'text' | 'first' | 'first-last' | 'reference';
 	type FrameRole = 'first' | 'last';
@@ -96,6 +97,7 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	let continuationSource: GeneratedVideo | null = null;
 	let sceneContext: string | null = null;
 	let sceneChatId: string | null = null;
+	let sceneCharacters: string | null = null;
 	let capturingFrame = false;
 	let scrollContainer: HTMLDivElement;
 	let firstFileInput: HTMLInputElement;
@@ -357,9 +359,68 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 					? 'first-and-last-frame interpolation'
 					: 'reference-to-video using the ordered Picture labels';
 
+	// Turn a handed-over roster into reference frames. The <Picture N> numbering is
+	// positional, so the summary must record which indices belong to which character
+	// or the model will attribute the wrong face to the wrong name.
+	const loadCharacterReferences = async (
+		roster: { name?: string; description?: string; imageFileIds?: string[] }[]
+	): Promise<{ images: FrameAsset[]; summary: string | null }> => {
+		const images: FrameAsset[] = [];
+		const lines: string[] = [];
+		for (const character of roster) {
+			const fileIds = Array.isArray(character?.imageFileIds) ? character.imageFileIds : [];
+			const indices: number[] = [];
+			for (const fileId of fileIds) {
+				if (images.length >= 9) break;
+				try {
+					const frame = await loadFrameFromFile(fileId, character?.name ?? 'character');
+					images.push(frame);
+					indices.push(images.length);
+				} catch (error) {
+					console.error(error);
+				}
+			}
+			if (indices.length > 0) {
+				const pictures = indices.map((index) => `<Picture ${index}>`).join(', ');
+				lines.push(
+					`${character?.name ?? 'Unnamed'} — ${pictures}. ${character?.description?.trim() || 'No written description provided; rely on the reference images.'}`
+				);
+			}
+		}
+		return { images, summary: lines.length ? lines.join('\n') : null };
+	};
+
+	const loadFrameFromFile = async (fileId: string, label: string): Promise<FrameAsset> => {
+		const response = await fetch(`${WEBUI_API_BASE_URL}/files/${fileId}/content`, {
+			headers: { Authorization: `Bearer ${localStorage.token}` }
+		});
+		if (!response.ok) throw new Error('A reference image could not be read.');
+		const blob = await response.blob();
+		const dataUrl = await new Promise<string>((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => resolve(reader.result as string);
+			reader.onerror = () => reject(new Error('A reference image could not be decoded.'));
+			reader.readAsDataURL(blob);
+		});
+		const dimensions = await new Promise<{ width: number; height: number }>((resolve) => {
+			const image = new Image();
+			image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+			image.onerror = () => resolve({ width: 0, height: 0 });
+			image.src = dataUrl;
+		});
+		return {
+			name: `${label}.png`,
+			type: blob.type || 'image/png',
+			size: blob.size,
+			width: dimensions.width,
+			height: dimensions.height,
+			dataUrl
+		};
+	};
+
 	// A chat message can hand a scene over to the studio. The payload is read once
 	// and removed, so reloading the page does not silently redraft an old scene.
-	const consumeSceneHandoff = (): boolean => {
+	const consumeSceneHandoff = async (): Promise<boolean> => {
 		let raw: string | null = null;
 		try {
 			raw = sessionStorage.getItem('owui-video-scene-handoff');
@@ -390,7 +451,20 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 			if (handoff?.modelId && availableModels.some((model) => model.id === handoff.modelId)) {
 				selectedModelId = handoff.modelId;
 			}
-			selectMode('text');
+
+			// A roster turns this into a Ref2VA generation. Images arrive as file ids and
+			// are fetched here, because Ref2VA needs the pixels at generation time.
+			const roster = Array.isArray(handoff?.characters) ? handoff.characters : [];
+			const loaded = await loadCharacterReferences(roster);
+			if (loaded.images.length > 0) {
+				selectMode('reference');
+				referenceImages = loaded.images;
+				sceneCharacters = loaded.summary;
+			} else {
+				// No usable references: fall back to the plain text-to-video path.
+				selectMode('text');
+				sceneCharacters = null;
+			}
 			return true;
 		} catch {
 			toast.error('The scene from chat could not be read.');
@@ -401,6 +475,7 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	const clearSceneContext = () => {
 		sceneContext = null;
 		sceneChatId = null;
+		sceneCharacters = null;
 	};
 
 	const draftPrompt = async () => {
@@ -436,8 +511,18 @@ Hard constraints:
 Frame metadata only (the image pixels are intentionally unavailable to you):
 ${frameMetadata()}
 ${
-	sceneContext
+	sceneCharacters
 		? `
+Cast for this scene. Each entry lists the reference pictures that show that character, so cite exactly those <Picture N> tags in subject_definitions and never attribute one character's pictures to another:
+---
+${sceneCharacters}
+---
+Every named person below must be rendered from their own reference pictures. Where a character has no written description, describe them only as the references and the scene support.
+`
+		: ''
+}${
+							sceneContext
+								? `
 This brief depicts a scene from a chat conversation. The video model has no access to that conversation and no memory of it, so the brief must stand entirely on its own.
 
 Preceding conversation, oldest first. Use it ONLY to establish how people, places, and objects look and sound:
@@ -451,8 +536,8 @@ Rules for this scene:
 - Depict only what happens in the creative direction above. Earlier turns are background for appearance and continuity, not events to re-stage.
 - Give explicit camera framing and movement, and a full soundscape including any speech.
 `
-		: ''
-}${
+								: ''
+						}${
 							continuationSource
 								? `
 This clip is a direct continuation. The first-frame anchor is the final frame of the previous clip, so the new shot must begin exactly where that one ended. The previous clip's brief was:
@@ -766,7 +851,7 @@ Write the final MiniMax H3 production brief now.`
 			availableModels[0]?.id ??
 			'';
 		loaded = true;
-		const handoff = consumeSceneHandoff();
+		const handoff = await consumeSceneHandoff();
 		await loadVideoHistory();
 		const activeJobId = localStorage.getItem(activeJobStorageKey());
 		if (activeJobId) {

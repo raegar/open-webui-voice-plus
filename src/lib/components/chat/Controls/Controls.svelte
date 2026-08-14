@@ -8,12 +8,14 @@
 	import Valves from '$lib/components/chat/Controls/Valves.svelte';
 	import FileItem from '$lib/components/common/FileItem.svelte';
 	import Collapsible from '$lib/components/common/Collapsible.svelte';
+	import VideoCharacters from '$lib/components/chat/Controls/VideoCharacters.svelte';
 
-	import { user, settings } from '$lib/stores';
+	import { config, user, settings } from '$lib/stores';
 	export let models = [];
 	export let chatFiles = [];
 	export let params = {};
 	export let embed = false;
+	export let chatId: string | null = null;
 
 	// Persist collapsible section open/close state
 	const getOpen = (key: string, fallback = true): boolean => {
@@ -25,6 +27,7 @@
 	};
 
 	let showFiles = getOpen('files');
+	let showVideoCharacters = getOpen('videoCharacters', false);
 	let showValves = getOpen('valves', false);
 	let showSystemPrompt = getOpen('systemPrompt');
 	let showAdvancedParams = getOpen('advancedParams');
@@ -48,6 +51,21 @@
 
 	{#if $user?.role === 'admin' || ($user?.permissions.chat?.controls ?? true)}
 		<div class=" dark:text-gray-200 text-sm py-0.5 px-0.5">
+			{#if $config?.features?.enable_video_generation && ($user?.role === 'admin' || $user?.permissions?.features?.image_generation)}
+				<Collapsible
+					title={$i18n.t('Video characters')}
+					bind:open={showVideoCharacters}
+					onChange={setOpen('videoCharacters')}
+					buttonClassName="w-full"
+				>
+					<div slot="content">
+						<VideoCharacters {chatId} />
+					</div>
+				</Collapsible>
+
+				<hr class="my-2 border-gray-50 dark:border-gray-700/10" />
+			{/if}
+
 			{#if chatFiles.length > 0}
 				<Collapsible
 					title={$i18n.t('Files')}
