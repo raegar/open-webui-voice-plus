@@ -98,6 +98,8 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	let sceneContext: string | null = null;
 	let sceneChatId: string | null = null;
 	let sceneCharacters: string | null = null;
+	// Voice reference data URLs, in the same order as the <Audio N> labels.
+	let sceneVoices: string[] = [];
 	let capturingFrame = false;
 	let scrollContainer: HTMLDivElement;
 	let firstFileInput: HTMLInputElement;
@@ -140,6 +142,7 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 		}
 		// Any manual mode change means the starting image is no longer a continuation.
 		continuationSource = null;
+		if (mode !== 'reference') sceneVoices = [];
 		markPromptForReview();
 	};
 
@@ -364,8 +367,9 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	// or the model will attribute the wrong face to the wrong name.
 	const loadCharacterReferences = async (
 		roster: { name?: string; description?: string; imageFileIds?: string[] }[]
-	): Promise<{ images: FrameAsset[]; summary: string | null }> => {
+	): Promise<{ images: FrameAsset[]; voices: string[]; summary: string | null }> => {
 		const images: FrameAsset[] = [];
+		const voices: string[] = [];
 		const lines: string[] = [];
 		for (const character of roster) {
 			const fileIds = Array.isArray(character?.imageFileIds) ? character.imageFileIds : [];
@@ -459,10 +463,12 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 			if (loaded.images.length > 0) {
 				selectMode('reference');
 				referenceImages = loaded.images;
+				sceneVoices = loaded.voices;
 				sceneCharacters = loaded.summary;
 			} else {
 				// No usable references: fall back to the plain text-to-video path.
 				selectMode('text');
+				sceneVoices = [];
 				sceneCharacters = null;
 			}
 			return true;
@@ -476,6 +482,7 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 		sceneContext = null;
 		sceneChatId = null;
 		sceneCharacters = null;
+		sceneVoices = [];
 	};
 
 	const draftPrompt = async () => {
@@ -517,6 +524,7 @@ Cast for this scene. Each entry lists the reference pictures that show that char
 ---
 ${sceneCharacters}
 ---
+Where a character lists an <Audio N> tag, that recording is their speaking voice: cite it in subject_definitions alongside their pictures and keep their dialogue in that voice. Never give one character another's audio.
 Every named person below must be rendered from their own reference pictures. Where a character has no written description, describe them only as the references and the scene support.
 `
 		: ''
@@ -707,7 +715,10 @@ Write the final MiniMax H3 production brief now.`
 					? { first_frame_data_url: firstFrame.dataUrl }
 					: {}),
 				...(workflowMode === 'reference'
-					? { reference_image_data_urls: referenceImages.map((image) => image.dataUrl) }
+					? {
+							reference_image_data_urls: referenceImages.map((image) => image.dataUrl),
+							...(sceneVoices.length > 0 ? { reference_audio_data_urls: sceneVoices } : {})
+						}
 					: {}),
 				...(workflowMode === 'first-last' && lastFrame
 					? { last_frame_data_url: lastFrame.dataUrl }

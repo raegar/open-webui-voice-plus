@@ -208,3 +208,42 @@ async def test_client_uploads_and_wires_reference_images():
     )
     uploads = [call for call in session.calls if "/upload/image" in call[1]]
     assert len(uploads) == 2
+
+
+def test_reference_workflow_wires_voice_references():
+    """ComfyUI ignores an unknown autogrow key instead of erroring, so the exact
+    `ref_audios.ref_audio_N` shape is worth asserting."""
+    workflow = build_minimax_h3_reference_workflow(
+        "a prompt",
+        "16:9",
+        0.2,
+        5,
+        123,
+        ["img-a.png", "img-b.png"],
+        ["voice-1.wav", "voice-2.mp3"],
+    )
+    node = workflow["136"]["inputs"]
+    assert node["ref_images.ref_image_0"] == ["200", 0] or node["ref_images.ref_image_0"][1] == 0
+    assert node["ref_audios.ref_audio_0"][1] == 0
+    assert node["ref_audios.ref_audio_1"][1] == 0
+
+    audio_nodes = [
+        n for n in workflow.values() if n.get("class_type") == "LoadAudio"
+    ]
+    assert len(audio_nodes) == 2
+    assert {n["inputs"]["audio"] for n in audio_nodes} == {"voice-1.wav", "voice-2.mp3"}
+
+
+def test_reference_workflow_rejects_too_many_voices():
+    with pytest.raises(ValueError):
+        build_minimax_h3_reference_workflow(
+            "a prompt", "16:9", 0.2, 5, 1, ["img.png"], ["a.wav", "b.wav", "c.wav", "d.wav"]
+        )
+
+
+def test_reference_workflow_without_voices_has_no_audio_nodes():
+    workflow = build_minimax_h3_reference_workflow(
+        "a prompt", "16:9", 0.2, 5, 1, ["img.png"]
+    )
+    assert not [n for n in workflow.values() if n.get("class_type") == "LoadAudio"]
+    assert not [k for k in workflow["136"]["inputs"] if k.startswith("ref_audios.")]

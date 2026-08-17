@@ -59,6 +59,20 @@ The studio reads the payload once in `onMount` via `consumeSceneHandoff()` and r
 
 When `sceneContext` is set, `draftPrompt()` appends a block instructing the model to describe every character from scratch, to never identify anyone by name alone, to commit to an attribute rather than hedging when the conversation does not state one, and to treat earlier turns as background rather than events to re-stage. A violet banner offers **Back to chat** and **Drop context**.
 
+### Voice references
+
+`MiniMaxH3ReferenceToVideo` exposes four optional autogrow inputs, not just images: `ref_images` (max 9), `ref_audios` (max 3), `ref_videos` (max 3), and `ref_video_audios` (max 3). A character can carry one voice reference, stored as `video_character.voice_file_id`.
+
+The autogrow key prefix comes from the node's own `TemplatePrefix` — `ref_audio_` — so voices wire as `ref_audios.ref_audio_{index}` through `LoadAudio` nodes, mirroring `ref_images.ref_image_{index}`. **ComfyUI silently ignores an unknown autogrow key rather than erroring**, so a typo here produces a silently voice-less video; `test_videos_comfyui.py` asserts the exact shape.
+
+ComfyUI's `/upload/image` does not validate file type — it writes whatever it is given into the input directory, which is where `LoadAudio` reads from — so audio uploads reuse the existing image upload client. `LoadAudio` resolves format by file extension, so `_load_audio_data_url` names the temp file to match the declared content type.
+
+The audio budget is much tighter than the image budget: three voiced characters fill a scene. The chat picker refuses an attach that would exceed it. A voice is only sent when its character also contributes pictures, since an `<Audio N>` label for an unseen character would confuse attribution, and the drafting request states which audio belongs to whom for the same reason picture indices are spelled out.
+
+### Not yet exposed: ref_image_size
+
+The reference node takes `ref_image_size`, currently hardcoded to `"match"`. Its tooltip: `'max'` uses the reference pipeline's 2048px short edge for best identity fidelity, and because reference tokens ride through every sampling step, `'max'` can be several times slower. Worth exposing as a quality toggle if character likeness ever drifts. `ref_videos` and `ref_video_audios` are also unused and would allow motion/soundtrack references.
+
 ### Continuing a clip
 
 Every video card (current and history) has **Continue from end**, which chains clips into a longer sequence. `captureFinalFrame()` fetches the MP4 with the bearer token, wraps it in a blob URL, seeks a decoded `<video>` element to `duration - 0.05`, and paints that frame to a canvas as a PNG data URL. Seeking to exactly `duration` lands past the last frame and paints nothing, so the epsilon is required. The blob URL keeps the canvas untainted and avoids re-negotiating auth on the media element.

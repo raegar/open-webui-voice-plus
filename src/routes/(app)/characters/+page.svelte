@@ -22,6 +22,20 @@
 	// Mirrors the max_length on VideoCharacterForm; exceeding it is a 422 from the API.
 	const MAX_DESCRIPTION = 4000;
 	const MAX_NAME = 200;
+	// The Ref2VA node accepts at most 3 standalone ref_audios across the whole
+	// generation, so only three attached characters can be voiced in one scene.
+	const AUDIO_TYPES = [
+		'audio/wav',
+		'audio/x-wav',
+		'audio/mpeg',
+		'audio/mp3',
+		'audio/mp4',
+		'audio/m4a',
+		'audio/x-m4a',
+		'audio/ogg',
+		'audio/flac',
+		'audio/webm'
+	];
 
 	let loaded = false;
 	let loading = false;
@@ -31,6 +45,8 @@
 	let busyId: string | null = null;
 	let fileInput: HTMLInputElement;
 	let uploadTargetId: string | null = null;
+	let voiceInput: HTMLInputElement;
+	let voiceTargetId: string | null = null;
 	let descriptionDrafts: Record<string, string> = {};
 	let pendingDeletion: VideoCharacter | null = null;
 	let showDeleteConfirm = false;
@@ -157,6 +173,60 @@
 			if (!uploaded?.id) throw new Error('Upload failed');
 			const updated = await updateVideoCharacter(localStorage.token, character.id, {
 				image_file_ids: [...character.image_file_ids, uploaded.id]
+			});
+			characters = characters.map((c) => (c.id === updated.id ? updated : c));
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			busyId = null;
+		}
+	};
+
+	const pickVoice = (characterId: string) => {
+		voiceTargetId = characterId;
+		voiceInput.click();
+	};
+
+	const handleVoice = async (event: Event) => {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		const character = characters.find((c) => c.id === voiceTargetId);
+		voiceTargetId = null;
+		if (!file || !character) return;
+
+		// Browsers report m4a inconsistently, so fall back to the extension.
+		const isAudio =
+			AUDIO_TYPES.includes(file.type) || /\.(wav|mp3|m4a|ogg|flac|webm)$/i.test(file.name);
+		if (!isAudio) {
+			toast.error('Use a WAV, MP3, M4A, OGG, FLAC, or WebM audio file.');
+			return;
+		}
+		if (file.size > 25 * 1024 * 1024) {
+			toast.error('Voice reference must be under 25 MB.');
+			return;
+		}
+
+		busyId = character.id;
+		try {
+			const uploaded = await uploadFile(localStorage.token, file);
+			if (!uploaded?.id) throw new Error('Upload failed');
+			const updated = await updateVideoCharacter(localStorage.token, character.id, {
+				voice_file_id: uploaded.id
+			});
+			characters = characters.map((c) => (c.id === updated.id ? updated : c));
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			busyId = null;
+		}
+	};
+
+	const removeVoice = async (character: VideoCharacter) => {
+		busyId = character.id;
+		try {
+			const updated = await updateVideoCharacter(localStorage.token, character.id, {
+				voice_file_id: ''
 			});
 			characters = characters.map((c) => (c.id === updated.id ? updated : c));
 		} catch (error) {
@@ -329,6 +399,31 @@
 										>
 									{/if}
 								</div>
+								<div
+									class="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3 dark:border-gray-850"
+								>
+									<span class="text-xs font-medium">Voice</span>
+									{#if character.voice_file_id}
+										<!-- svelte-ignore a11y-media-has-caption -->
+										<audio
+											class="h-8 max-w-[15rem] flex-1"
+											controls
+											src={imageUrl(character.voice_file_id)}
+										></audio>
+										<button
+											class="text-xs text-gray-500 hover:underline"
+											on:click={() => removeVoice(character)}>Remove</button
+										>
+									{:else}
+										<button
+											class="rounded-lg border border-dashed border-gray-300 px-2.5 py-1 text-xs text-gray-500 hover:border-gray-500 dark:border-gray-700"
+											on:click={() => pickVoice(character.id)}>Add voice reference</button
+										>
+										<span class="text-xs text-gray-400"
+											>Optional. A few seconds of clean speech.</span
+										>
+									{/if}
+								</div>
 								<p class="mt-2 text-xs text-gray-500">
 									{character.image_file_ids.length}/{MAX_IMAGES_PER_CHARACTER} reference images.
 									{#if character.image_file_ids.length === 0}
@@ -354,4 +449,12 @@
 	accept="image/png,image/jpeg,image/webp"
 	bind:this={fileInput}
 	on:change={handleImage}
+/>
+
+<input
+	class="hidden"
+	type="file"
+	accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.webm"
+	bind:this={voiceInput}
+	on:change={handleVoice}
 />

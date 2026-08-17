@@ -9,6 +9,7 @@ export type VideoGenerationOptions = {
 	first_frame_data_url?: string;
 	last_frame_data_url?: string;
 	reference_image_data_urls?: string[];
+	reference_audio_data_urls?: string[];
 };
 
 export type VideoGenerationJob = {
@@ -151,6 +152,7 @@ export type VideoCharacter = {
 	name: string;
 	description: string;
 	image_file_ids: string[];
+	voice_file_id: string;
 };
 
 const videoCharacterRequest = async (token: string, path: string, init: RequestInit = {}) => {
@@ -199,7 +201,7 @@ export const createVideoCharacter = async (
 export const updateVideoCharacter = async (
 	token: string,
 	id: string,
-	patch: { name?: string; description?: string; image_file_ids?: string[] }
+	patch: { name?: string; description?: string; image_file_ids?: string[]; voice_file_id?: string }
 ): Promise<VideoCharacter> =>
 	await videoCharacterRequest(token, `/characters/${id}`, {
 		method: 'POST',

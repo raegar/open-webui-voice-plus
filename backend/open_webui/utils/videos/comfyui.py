@@ -13,6 +13,9 @@ class ComfyUIVideoError(RuntimeError):
     pass
 
 
+# MiniMaxH3ReferenceToVideo caps standalone ref_audios at 3 (see its Autogrow template).
+MAX_REFERENCE_AUDIOS = 3
+
 RESOLUTIONS = {
     ("16:9", 0.2): (608, 352),
     ("16:9", 0.4): (864, 480),
@@ -185,10 +188,15 @@ def build_minimax_h3_reference_workflow(
     duration: int,
     seed: int,
     reference_image_names: Sequence[str],
+    reference_audio_names: Sequence[str] = (),
 ) -> dict:
     """Build the official MiniMax H3 Ref2VA image-reference graph."""
     if not 1 <= len(reference_image_names) <= 9:
         raise ValueError("Reference-to-Video requires between 1 and 9 images")
+    if len(reference_audio_names) > MAX_REFERENCE_AUDIOS:
+        raise ValueError(
+            f"Reference-to-Video accepts at most {MAX_REFERENCE_AUDIOS} voice references"
+        )
     try:
         width, height = RESOLUTIONS[(aspect_ratio, megapixels)]
     except KeyError as exc:
@@ -327,6 +335,18 @@ def build_minimax_h3_reference_workflow(
         }
         workflow["136"]["inputs"][f"ref_images.ref_image_{index}"] = [node_id, 0]
 
+    # Voice references ride the sibling autogrow input. The key prefix comes from
+    # the node's own TemplatePrefix (prefix="ref_audio_"); a wrong key is silently
+    # ignored by ComfyUI rather than erroring, so it has to match exactly.
+    for index, audio_name in enumerate(reference_audio_names):
+        node_id = f"20{index}"
+        workflow[node_id] = {
+            "inputs": {"audio": audio_name},
+            "class_type": "LoadAudio",
+            "_meta": {"title": f"Load Reference Audio {index + 1}"},
+        }
+        workflow["136"]["inputs"][f"ref_audios.ref_audio_{index}"] = [node_id, 0]
+
     return workflow
 
 
@@ -411,12 +431,19 @@ class ComfyUIVideoClient:
         first_frame: Optional[tuple[bytes, str, str]] = None,
         last_frame: Optional[tuple[bytes, str, str]] = None,
         reference_images: Optional[Sequence[tuple[bytes, str, str]]] = None,
+        reference_audios: Optional[Sequence[tuple[bytes, str, str]]] = None,
     ) -> tuple[bytes, str, str]:
         first_frame_name = await self.upload_image(*first_frame) if first_frame else None
         last_frame_name = await self.upload_image(*last_frame) if last_frame else None
         reference_image_names = [
             await self.upload_image(*reference_image)
             for reference_image in reference_images or []
+        ]
+        # /upload/image does not validate file type; it writes whatever it is given
+        # into ComfyUI's input directory, which is what LoadAudio reads from.
+        reference_audio_names = [
+            await self.upload_image(*reference_audio)
+            for reference_audio in reference_audios or []
         ]
         if reference_image_names:
             workflow = build_minimax_h3_reference_workflow(
@@ -426,6 +453,7 @@ class ComfyUIVideoClient:
                 duration,
                 seed,
                 reference_image_names,
+                reference_audio_names,
             )
         else:
             workflow = build_minimax_h3_workflow(

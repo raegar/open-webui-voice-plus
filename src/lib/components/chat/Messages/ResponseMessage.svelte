@@ -287,7 +287,8 @@
 					.map((character) => ({
 						name: character.name,
 						description: character.description,
-						imageFileIds: character.image_file_ids
+						imageFileIds: character.image_file_ids,
+						voiceFileId: character.voice_file_id ?? ''
 					}));
 			} catch (error) {
 				// A roster lookup failure must not block the scene; fall back to text-to-video.

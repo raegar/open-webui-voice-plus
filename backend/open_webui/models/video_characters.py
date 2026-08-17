@@ -20,7 +20,7 @@ from uuid import uuid4
 
 from open_webui.internal.db import Base, engine, get_db
 from pydantic import BaseModel, Field
-from sqlalchemy import BigInteger, Column, Integer, String, Text
+from sqlalchemy import BigInteger, Column, Integer, String, Text, inspect, text
 
 
 log = logging.getLogger(__name__)
@@ -28,6 +28,9 @@ log = logging.getLogger(__name__)
 # Ref2VA addresses images as <Picture 1>..<Picture N> and accepts at most 9.
 MAX_REFERENCE_IMAGES = 9
 MAX_IMAGES_PER_CHARACTER = 3
+# The node accepts at most three standalone ref_audios, a far tighter budget than
+# images, so a chat can carry only three voiced characters.
+MAX_REFERENCE_AUDIOS = 3
 
 
 class VideoCharacter(Base):
@@ -42,6 +45,8 @@ class VideoCharacter(Base):
     # JSON array of file ids; order defines this character's picture order.
     image_file_ids = Column(Text, nullable=False, default="[]")
     position = Column(Integer, nullable=False, default=0)
+    # Single file id of a voice reference, or "" for none.
+    voice_file_id = Column(String, nullable=False, default="")
     created_at = Column(BigInteger, nullable=False)
     updated_at = Column(BigInteger, nullable=False)
 
@@ -63,6 +68,7 @@ class VideoCharacterModel(BaseModel):
     name: str
     description: str
     image_file_ids: list[str]
+    voice_file_id: str
     created_at: int
     updated_at: int
 
@@ -71,12 +77,14 @@ class VideoCharacterForm(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=4000)
     image_file_ids: list[str] = Field(default_factory=list)
+    voice_file_id: str = ""
 
 
 class VideoCharacterUpdateForm(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=4000)
     image_file_ids: Optional[list[str]] = None
+    voice_file_id: Optional[str] = None
 
 
 def _to_model(row: VideoCharacter) -> VideoCharacterModel:
@@ -90,6 +98,7 @@ def _to_model(row: VideoCharacter) -> VideoCharacterModel:
         name=row.name,
         description=row.description or "",
         image_file_ids=[i for i in file_ids if isinstance(i, str)],
+        voice_file_id=row.voice_file_id or "",
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -121,6 +130,7 @@ class VideoCharactersTable:
                 name=form.name.strip(),
                 description=form.description.strip(),
                 image_file_ids=json.dumps(form.image_file_ids[:MAX_IMAGES_PER_CHARACTER]),
+                voice_file_id=form.voice_file_id or "",
                 position=0,
                 created_at=now,
                 updated_at=now,
@@ -145,6 +155,8 @@ class VideoCharactersTable:
                 row.image_file_ids = json.dumps(
                     form.image_file_ids[:MAX_IMAGES_PER_CHARACTER]
                 )
+            if form.voice_file_id is not None:
+                row.voice_file_id = form.voice_file_id
             row.updated_at = int(time.time())
             db.commit()
             db.refresh(row)
@@ -236,6 +248,28 @@ VideoCharacter.__table__.create(bind=engine, checkfirst=True)
 VideoChatCharacter.__table__.create(bind=engine, checkfirst=True)
 
 
+def _add_missing_columns() -> None:
+    """Add columns introduced after the table first shipped.
+
+    `__table__.create(checkfirst=True)` is a no-op on an existing table, so a new
+    column has to be added explicitly or every query against it fails.
+    """
+    try:
+        existing = {c["name"] for c in inspect(engine).get_columns("video_character")}
+        if "voice_file_id" in existing:
+            return
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE video_character "
+                    "ADD COLUMN voice_file_id VARCHAR NOT NULL DEFAULT ''"
+                )
+            )
+        log.info("Added video_character.voice_file_id")
+    except Exception:
+        log.exception("Could not add video_character.voice_file_id")
+
+
 def _migrate_chat_scoped_characters() -> None:
     """Convert pre-library rows into library characters plus attachments.
 
@@ -279,4 +313,5 @@ def _migrate_chat_scoped_characters() -> None:
         log.exception("Video character migration failed")
 
 
+_add_missing_columns()
 _migrate_chat_scoped_characters()

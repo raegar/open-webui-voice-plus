@@ -18,6 +18,8 @@
 
 	// Ref2VA accepts at most 9 images in total, addressed as <Picture 1>..<Picture N>.
 	const MAX_REFERENCE_IMAGES = 9;
+	// Standalone ref_audios are capped at 3, far tighter than the image budget.
+	const MAX_REFERENCE_AUDIOS = 3;
 
 	let library: VideoCharacter[] = [];
 	let attachedIds: string[] = [];
@@ -27,6 +29,7 @@
 
 	$: attached = library.filter((c) => attachedIds.includes(c.id));
 	$: usedImages = attached.reduce((sum, c) => sum + c.image_file_ids.length, 0);
+	$: usedVoices = attached.filter((c) => c.voice_file_id).length;
 
 	const imageUrl = (fileId: string) => `${WEBUI_API_BASE_URL}/files/${fileId}/content`;
 
@@ -59,6 +62,12 @@
 		// Refuse an attach that would exceed what Ref2VA can accept.
 		if (!isAttached && usedImages + character.image_file_ids.length > MAX_REFERENCE_IMAGES) {
 			toast.error($i18n.t('Reference video supports up to 9 images. Detach someone else first.'));
+			return;
+		}
+		if (!isAttached && character.voice_file_id && usedVoices >= MAX_REFERENCE_AUDIOS) {
+			toast.error(
+				$i18n.t('Only 3 voiced characters fit in one scene. Detach a voiced character first.')
+			);
 			return;
 		}
 
@@ -124,7 +133,7 @@
 								{$i18n.t('No reference images')}
 							{:else}
 								{character.image_file_ids.length}
-								{$i18n.t('images')}
+								{$i18n.t('images')}{character.voice_file_id ? ` · ${$i18n.t('voice')}` : ''}
 							{/if}
 						</div>
 					</div>
@@ -139,7 +148,11 @@
 			{/each}
 
 			<div class="flex items-center justify-between text-[11px] text-gray-500">
-				<span>{usedImages}/{MAX_REFERENCE_IMAGES} {$i18n.t('reference images used')}</span>
+				<span
+					>{usedImages}/{MAX_REFERENCE_IMAGES}
+					{$i18n.t('images')} · {usedVoices}/{MAX_REFERENCE_AUDIOS}
+					{$i18n.t('voices')}</span
+				>
 				<a href="/characters" class="underline">{$i18n.t('Manage')}</a>
 			</div>
 		{/if}

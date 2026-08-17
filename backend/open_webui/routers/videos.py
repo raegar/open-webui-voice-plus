@@ -39,6 +39,7 @@ class CreateVideoForm(BaseModel):
     first_frame_data_url: Optional[str] = Field(default=None, max_length=36_000_000)
     last_frame_data_url: Optional[str] = Field(default=None, max_length=36_000_000)
     reference_image_data_urls: list[str] = Field(default_factory=list, max_length=9)
+    reference_audio_data_urls: list[str] = Field(default_factory=list, max_length=3)
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
     megapixels: Literal[0.2, 0.4] = 0.2
     duration: Literal[3, 5, 10, 15] = 3
@@ -116,6 +117,46 @@ def _load_frame_data_url(value: str, role: str) -> tuple[bytes, str, str]:
         )
     extension = mimetypes.guess_extension(content_type) or ".png"
     return image_data, f"{role.lower().replace(' ', '-')}{extension}", content_type
+
+
+AUDIO_CONTENT_TYPES = {
+    "audio/wav",
+    "audio/x-wav",
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/mp4",
+    "audio/m4a",
+    "audio/x-m4a",
+    "audio/ogg",
+    "audio/flac",
+    "audio/webm",
+}
+
+
+def _load_audio_data_url(value: str, index: int) -> tuple[bytes, str, str]:
+    """Validate a voice reference. LoadAudio reads by extension, so the filename
+    must carry one that matches the declared content type."""
+    if len(value) > 36_000_000:
+        raise HTTPException(status_code=400, detail="Voice reference must be under 25 MB")
+    try:
+        header, encoded = value.split(",", 1)
+        content_type = header.removeprefix("data:").split(";", 1)[0].lower()
+        if not header.endswith(";base64") or content_type not in AUDIO_CONTENT_TYPES:
+            raise ValueError
+        audio_data = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Voice reference must be a base64 WAV, MP3, M4A, OGG, FLAC, or WebM file",
+        ) from exc
+    if not audio_data or len(audio_data) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Voice reference must be under 25 MB")
+    extension = mimetypes.guess_extension(content_type) or ".wav"
+    if content_type in {"audio/mpeg", "audio/mp3"}:
+        extension = ".mp3"
+    elif content_type in {"audio/m4a", "audio/x-m4a", "audio/mp4"}:
+        extension = ".m4a"
+    return audio_data, f"voice-{index}{extension}", content_type
 
 
 def _upload_video(request, video_data, filename, content_type, metadata, user):
@@ -244,6 +285,8 @@ async def create_video_character(
 ):
     _check_video_access(request, user)
     _verify_owns_files(user, form_data.image_file_ids)
+    if form_data.voice_file_id:
+        _verify_owns_files(user, [form_data.voice_file_id])
     return VideoCharacters.insert(user.id, form_data)
 
 
@@ -282,6 +325,8 @@ async def update_video_character(
     _check_video_access(request, user)
     if form_data.image_file_ids is not None:
         _verify_owns_files(user, form_data.image_file_ids)
+    if form_data.voice_file_id:
+        _verify_owns_files(user, [form_data.voice_file_id])
     character = VideoCharacters.update(user.id, character_id, form_data)
     if not character:
         raise HTTPException(status_code=404, detail="Character not found")
@@ -345,6 +390,10 @@ async def video_generations(
         _load_frame_data_url(value, f"Reference image {index + 1}")
         for index, value in enumerate(form_data.reference_image_data_urls)
     ]
+    reference_audios = [
+        _load_audio_data_url(value, index + 1)
+        for index, value in enumerate(form_data.reference_audio_data_urls)
+    ]
     client = ComfyUIVideoClient(
         request.app.state.config.COMFYUI_VIDEO_BASE_URL,
         request.app.state.config.COMFYUI_VIDEO_API_KEY,
@@ -359,6 +408,7 @@ async def video_generations(
         first_frame,
         last_frame,
         reference_images,
+        reference_audios,
     )
     generation_metadata = {
         **form_data.model_dump(
@@ -366,6 +416,7 @@ async def video_generations(
                 "first_frame_data_url",
                 "last_frame_data_url",
                 "reference_image_data_urls",
+                "reference_audio_data_urls",
             },
             exclude_none=True,
         ),
@@ -375,6 +426,7 @@ async def video_generations(
         "has_first_frame": first_frame is not None,
         "has_last_frame": last_frame is not None,
         "reference_image_count": len(reference_images),
+        "reference_audio_count": len(reference_audios),
     }
     _, url = _upload_video(
         request,
