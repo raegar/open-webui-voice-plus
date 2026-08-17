@@ -24,6 +24,8 @@
 	type AspectRatio = '16:9' | '9:16' | '1:1';
 	type Megapixels = 0.2 | 0.4;
 	type Duration = 3 | 5 | 10 | 15;
+	// MiniMaxH3ReferenceToVideo caps standalone ref_audios at 3.
+	const MAX_REFERENCE_AUDIOS = 3;
 	type FrameAsset = {
 		name: string;
 		type: string;
@@ -366,7 +368,12 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	// positional, so the summary must record which indices belong to which character
 	// or the model will attribute the wrong face to the wrong name.
 	const loadCharacterReferences = async (
-		roster: { name?: string; description?: string; imageFileIds?: string[] }[]
+		roster: {
+			name?: string;
+			description?: string;
+			imageFileIds?: string[];
+			voiceFileId?: string;
+		}[]
 	): Promise<{ images: FrameAsset[]; voices: string[]; summary: string | null }> => {
 		const images: FrameAsset[] = [];
 		const voices: string[] = [];
@@ -384,14 +391,26 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 					console.error(error);
 				}
 			}
+			// A voice only earns an <Audio N> label if the character is actually shown;
+			// labelling an unseen character would confuse attribution.
+			let audioLabel = '';
+			if (indices.length > 0 && character?.voiceFileId && voices.length < MAX_REFERENCE_AUDIOS) {
+				try {
+					const voice = await loadFrameFromFile(character.voiceFileId, 'voice');
+					voices.push(voice.dataUrl);
+					audioLabel = ` Their speaking voice is <Audio ${voices.length}>.`;
+				} catch (error) {
+					console.error(error);
+				}
+			}
 			if (indices.length > 0) {
 				const pictures = indices.map((index) => `<Picture ${index}>`).join(', ');
 				lines.push(
-					`${character?.name ?? 'Unnamed'} — ${pictures}. ${character?.description?.trim() || 'No written description provided; rely on the reference images.'}`
+					`${character?.name ?? 'Unnamed'} — ${pictures}.${audioLabel} ${character?.description?.trim() || 'No written description provided; rely on the reference images.'}`
 				);
 			}
 		}
-		return { images, summary: lines.length ? lines.join('\n') : null };
+		return { images, voices, summary: lines.length ? lines.join('\n') : null };
 	};
 
 	const loadFrameFromFile = async (fileId: string, label: string): Promise<FrameAsset> => {
@@ -463,7 +482,7 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 			if (loaded.images.length > 0) {
 				selectMode('reference');
 				referenceImages = loaded.images;
-				sceneVoices = loaded.voices;
+				sceneVoices = loaded.voices ?? [];
 				sceneCharacters = loaded.summary;
 			} else {
 				// No usable references: fall back to the plain text-to-video path.
@@ -701,6 +720,8 @@ Write the final MiniMax H3 production brief now.`
 		// Build everything that can throw BEFORE flipping `generating`. The button is
 		// disabled while generating, so an exception raised after that point wedges the
 		// studio permanently: the timer keeps counting and no request is ever sent.
+		// Tolerate a malformed roster rather than throwing inside the prepare step.
+		const voiceUrls = Array.isArray(sceneVoices) ? sceneVoices : [];
 		let jobId: string;
 		let options: VideoGenerationOptions;
 		try {
@@ -717,7 +738,7 @@ Write the final MiniMax H3 production brief now.`
 				...(workflowMode === 'reference'
 					? {
 							reference_image_data_urls: referenceImages.map((image) => image.dataUrl),
-							...(sceneVoices.length > 0 ? { reference_audio_data_urls: sceneVoices } : {})
+							...(voiceUrls.length > 0 ? { reference_audio_data_urls: voiceUrls } : {})
 						}
 					: {}),
 				...(workflowMode === 'first-last' && lastFrame
