@@ -69,6 +69,14 @@ ComfyUI's `/upload/image` does not validate file type — it writes whatever it 
 
 The audio budget is much tighter than the image budget: three voiced characters fill a scene. The chat picker refuses an attach that would exceed it. A voice is only sent when its character also contributes pictures, since an `<Audio N>` label for an unseen character would confuse attribution, and the drafting request states which audio belongs to whom for the same reason picture indices are spelled out.
 
+### Generation timeout
+
+`COMFYUI_VIDEO_TIMEOUT` bounds how long the backend polls ComfyUI for a finished render. The 600s default is **too short for this workflow**: a 15s Ref2VA clip has been observed taking 11m33s. On timeout the poll loop simply stops, so nothing downloads the MP4 and nothing stores it as an Open WebUI file — the render sits finished in ComfyUI's `output/video/` and is invisible to the studio, because the history lists OWUI's own files, not ComfyUI's output directory.
+
+The live container therefore pins `COMFYUI_VIDEO_TIMEOUT=2400`. The deploy script sets it explicitly rather than relying on the inherited environment. It is not persisted in the config DB (`video_generation` is `{}`), so the environment value wins; if someone ever sets it through the admin UI, the stored value takes precedence and the env var stops having an effect.
+
+**Known gap:** a timed-out job is abandoned rather than recoverable. The ComfyUI `prompt_id` is not recorded anywhere, and ComfyUI's own `/history` is in-memory and lost on restart, so once the poll gives up there is no way to reclaim the render short of importing the file by hand. Storing `prompt_id` on the job would make a timed-out generation resumable, and is the right fix if long renders stay common.
+
 ### Not yet exposed: ref_image_size
 
 The reference node takes `ref_image_size`, currently hardcoded to `"match"`. Its tooltip: `'max'` uses the reference pipeline's 2048px short edge for best identity fidelity, and because reference tokens ride through every sampling step, `'max'` can be several times slower. Worth exposing as a quality toggle if character likeness ever drifts. `ref_videos` and `ref_video_audios` are also unused and would allow motion/soundtrack references.
