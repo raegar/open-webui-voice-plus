@@ -128,6 +128,23 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	// no <d> lines it invents phonemes, which comes out as garbled speech.
 	const promptHasDialogue = (text: string) => /<d>[\s\S]*?<\/d>/i.test(text ?? '');
 
+	// Dropping the audio is not enough on its own. H3 always generates an audio track,
+	// and the drafted brief still asserts "Their speaking voice is <Audio N>" because
+	// that phrasing comes from the cast block we inject. Left in, the model invents
+	// speech to satisfy a claim nothing else fulfils. So strip the claims and say
+	// plainly that nobody speaks.
+	const silenceProductionPrompt = (text: string) =>
+		`${text
+			.split('\n')
+			.map((line) =>
+				line
+					.split('.')
+					.filter((sentence) => !/<Audio\s*\d+>/i.test(sentence))
+					.join('.')
+			)
+			.join('\n')
+			.trim()}\n\nNo character speaks in this shot. There is no dialogue and no voice-over: all voices are silent, and the audio contains only ambience and physical sounds.`;
+
 	$: voicesWithoutDialogue =
 		sceneVoices.length > 0 &&
 		productionPrompt.trim() !== '' &&
@@ -733,10 +750,15 @@ Write the final MiniMax H3 production brief now.`
 		// studio permanently: the timer keeps counting and no request is ever sent.
 		// Tolerate a malformed roster rather than throwing inside the prepare step.
 		const attachedVoices = Array.isArray(sceneVoices) ? sceneVoices : [];
-		const voiceUrls = promptHasDialogue(productionPrompt) ? attachedVoices : [];
-		if (attachedVoices.length > 0 && voiceUrls.length === 0) {
+		const hasDialogue = promptHasDialogue(productionPrompt);
+		const voiceUrls = hasDialogue ? attachedVoices : [];
+		// Send a brief that cannot ask for speech it never specifies.
+		const outboundPrompt = hasDialogue
+			? productionPrompt.trim()
+			: silenceProductionPrompt(productionPrompt.trim());
+		if (attachedVoices.length > 0 && !hasDialogue) {
 			toast.warning(
-				'No dialogue in the brief, so the voice references were left out. A voice with nothing to say produces garbled speech. Add the spoken lines in <d>...</d> tags and redraft to use it.'
+				'No dialogue in the brief, so the voice references were dropped and the shot was marked silent. A voice with nothing to say produces garbled speech. Put the spoken lines in <d>...</d> tags and redraft to use it.'
 			);
 		}
 		let jobId: string;
@@ -770,7 +792,7 @@ Write the final MiniMax H3 production brief now.`
 		startElapsedTimer();
 		localStorage.setItem(activeJobStorageKey(), jobId);
 		try {
-			await startVideoGenerationJob(localStorage.token, jobId, productionPrompt.trim(), options);
+			await startVideoGenerationJob(localStorage.token, jobId, outboundPrompt, options);
 		} catch (error) {
 			if (!String(error).includes('Server connection failed')) {
 				localStorage.removeItem(activeJobStorageKey());
@@ -781,7 +803,7 @@ Write the final MiniMax H3 production brief now.`
 			}
 			await wait(1500);
 			try {
-				await startVideoGenerationJob(localStorage.token, jobId, productionPrompt.trim(), options);
+				await startVideoGenerationJob(localStorage.token, jobId, outboundPrompt, options);
 			} catch (retryError) {
 				if (!String(retryError).includes('Server connection failed')) {
 					localStorage.removeItem(activeJobStorageKey());
