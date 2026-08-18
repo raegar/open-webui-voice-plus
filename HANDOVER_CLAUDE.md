@@ -192,7 +192,20 @@ docker exec open-webui python -c "import urllib.request; print(urllib.request.ur
 
 The authenticated history smoke test should verify that `/api/v1/videos/history` returns at least one user-owned video with a URL when the account has generated media. Do not print tokens or secret environment values.
 
-## Windows deployment and rollback
+## Deployment
+
+**Use `docker compose up -d`.** `docker-compose.yaml` is the source of truth: it pins the image, the external `open-webui` volume, the `E:` bind, the restart policy, and the environment including `WEBUI_SECRET_KEY` and `COMFYUI_VIDEO_TIMEOUT`.
+
+```powershell
+docker build --pull=false -t open-webui-voice-plus:latest .
+docker compose up -d
+```
+
+**Do not rebuild the run command from `docker inspect` of the live container.** That pattern was used for a long stretch of this project and it destroyed the container once: overriding an env var by filtering the flat argument array removed a value string but left its `--env` flag orphaned, which shifted every later argument until Docker read one as an image name. The container had already been removed by then, and the rollback container no longer existed, so the service went down with its entire environment — 40 variables that lived nowhere else — lost. It was recoverable only because `docker-compose.yaml` happened to hold the custom values, `WEBUI_SECRET_KEY` among them, so sessions survived.
+
+Two lasting lessons: the environment must live in a versioned file rather than only inside a running container, and any deploy that removes the current container before the replacement is proven needs a rollback that is verified to exist first.
+
+## Legacy: manual run reconstruction (superseded)
 
 Every code change ends with a rebuild and redeploy; a passing `npm run build` is not the finish line. Build first, then reconstruct the container from the current one’s environment and mounts.
 

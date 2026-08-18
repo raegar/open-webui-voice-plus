@@ -123,6 +123,16 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 		(workflowMode === 'first' && firstFrame !== null) ||
 		(workflowMode === 'first-last' && firstFrame !== null && lastFrame !== null);
 
+	// A voice reference conditions the model to produce speech whether or not the
+	// brief gives it words: the node appends an audio ref item unconditionally. With
+	// no <d> lines it invents phonemes, which comes out as garbled speech.
+	const promptHasDialogue = (text: string) => /<d>[\s\S]*?<\/d>/i.test(text ?? '');
+
+	$: voicesWithoutDialogue =
+		sceneVoices.length > 0 &&
+		productionPrompt.trim() !== '' &&
+		!promptHasDialogue(productionPrompt);
+
 	const markPromptForReview = () => {
 		promptApproved = false;
 	};
@@ -544,6 +554,7 @@ Cast for this scene. Each entry lists the reference pictures that show that char
 ${sceneCharacters}
 ---
 Where a character lists an <Audio N> tag, that recording is their speaking voice: cite it in subject_definitions alongside their pictures and keep their dialogue in that voice. Never give one character another's audio.
+A character with an <Audio N> tag MUST either speak at least one line, written verbatim inside <d>[Language] words.</d>, or be described explicitly as silent in this shot. Never leave a voiced character with no stated speech: the model will invent unintelligible words to fill the gap. Carry over any dialogue from the creative direction word for word rather than summarising it.
 Every named person below must be rendered from their own reference pictures. Where a character has no written description, describe them only as the references and the scene support.
 `
 		: ''
@@ -721,7 +732,13 @@ Write the final MiniMax H3 production brief now.`
 		// disabled while generating, so an exception raised after that point wedges the
 		// studio permanently: the timer keeps counting and no request is ever sent.
 		// Tolerate a malformed roster rather than throwing inside the prepare step.
-		const voiceUrls = Array.isArray(sceneVoices) ? sceneVoices : [];
+		const attachedVoices = Array.isArray(sceneVoices) ? sceneVoices : [];
+		const voiceUrls = promptHasDialogue(productionPrompt) ? attachedVoices : [];
+		if (attachedVoices.length > 0 && voiceUrls.length === 0) {
+			toast.warning(
+				'No dialogue in the brief, so the voice references were left out. A voice with nothing to say produces garbled speech. Add the spoken lines in <d>...</d> tags and redraft to use it.'
+			);
+		}
 		let jobId: string;
 		let options: VideoGenerationOptions;
 		try {
@@ -1229,6 +1246,16 @@ Write the final MiniMax H3 production brief now.`
 							{promptApproved ? 'Approved' : 'Needs approval'}
 						</span>
 					</div>
+					{#if voicesWithoutDialogue}
+						<div
+							class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+						>
+							A voice reference is attached but this brief contains no dialogue. A voice with
+							nothing to say makes the model invent unintelligible speech, so the voice will be left
+							out. Add the spoken lines inside
+							<code>&lt;d&gt;[English] ...&lt;/d&gt;</code> tags, or redraft.
+						</div>
+					{/if}
 					<textarea
 						class="min-h-80 w-full resize-y rounded-xl border border-gray-200 bg-transparent p-3 font-mono text-xs leading-5 outline-none focus:border-gray-500 dark:border-gray-700"
 						placeholder="The generated MiniMax H3 production brief will appear here. You can also write one directly."

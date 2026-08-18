@@ -10,7 +10,7 @@ services:
       - "3000:8080"
     volumes:
       - open-webui:/app/backend/data
-      - D:/Development/productivity/sweet-mail-biscuits:/app/sweetmail
+      - E:/Development/productivity/sweet-mail-biscuits:/app/sweetmail
     extra_hosts:
       - host.docker.internal:host-gateway
     environment:
@@ -20,6 +20,9 @@ services:
       - AUTOMATIC1111_BASE_URL=http://host.docker.internal:7861
       - ENABLE_VIDEO_GENERATION=True
       - COMFYUI_VIDEO_BASE_URL=http://host.docker.internal:8188
+      # A 15s Ref2VA render can exceed 11 minutes; the 600s default abandons
+      # the poll while ComfyUI is still working, orphaning a finished video.
+      - COMFYUI_VIDEO_TIMEOUT=2400
       - |
         IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE=### Task:
         Extract or generate an image generation prompt based on the assistant's most recent response in the chat history. The assistant may have described a scene, character, or image it wants to create — your job is to distill that into a clean, detailed image generation prompt.
