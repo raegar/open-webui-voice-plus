@@ -9,7 +9,9 @@
       "Bash(grep -n \"replace.*\\\\\\\\\\\\u2014\\\\|replace.*\\\\\\\\\\\\u2013\" /c/AI/open-webui-voice-plus/backend/open_webui/utils/middleware.py)",
       "Bash(awk -F: '{print $1 \" \" $2}')",
       "Bash(awk '$1 < 4500 {line=$0} END {print line}')",
-      "Bash(find /c/AI/open-webui-voice-plus -type f -name \"*.py\" -exec grep -l \"speech\\\\|TTS\" {} \\\\;)"
+      "Bash(find /c/AI/open-webui-voice-plus -type f -name \"*.py\" -exec grep -l \"speech\\\\|TTS\" {} \\\\;)",
+      "Bash(npx prettier *)",
+      "Bash(npx svelte-check *)"
     ]
   }
 }
