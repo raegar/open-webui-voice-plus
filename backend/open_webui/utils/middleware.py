@@ -108,6 +108,7 @@ from open_webui.utils.filter import (
 )
 from open_webui.utils.code_interpreter import execute_code_jupyter
 from open_webui.utils.payload import apply_system_prompt_to_body
+from open_webui.utils.character_personality import inject_character_personality
 from open_webui.utils.response import normalize_usage
 from open_webui.utils.mcp.client import MCPClient
 
@@ -2286,6 +2287,21 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         )
     except Exception as e:
         raise Exception(f"{e}")
+
+    # Character attachments are resolved on every turn rather than copied into chat
+    # history. This keeps the current profile authoritative even after old messages
+    # have fallen out of the context window or the profile has been edited.
+    if chat_id and user and not chat_id.startswith("local:"):
+        try:
+            from open_webui.models.video_characters import VideoCharacters
+
+            form_data["messages"] = inject_character_personality(
+                form_data["messages"],
+                VideoCharacters.get_for_chat(user.id, chat_id),
+            )
+        except Exception:
+            # Character metadata should enhance a chat, never prevent it from replying.
+            log.exception("Could not apply attached character profiles to chat completion")
 
     features = form_data.pop("features", None) or {}
     extra_params["__features__"] = features

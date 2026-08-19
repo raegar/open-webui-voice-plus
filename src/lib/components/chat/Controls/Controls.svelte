@@ -53,7 +53,7 @@
 		<div class=" dark:text-gray-200 text-sm py-0.5 px-0.5">
 			{#if $config?.features?.enable_video_generation && ($user?.role === 'admin' || $user?.permissions?.features?.image_generation)}
 				<Collapsible
-					title={$i18n.t('Video characters')}
+					title={$i18n.t('Character profiles')}
 					bind:open={showVideoCharacters}
 					onChange={setOpen('videoCharacters')}
 					buttonClassName="w-full"

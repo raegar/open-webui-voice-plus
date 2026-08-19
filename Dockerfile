@@ -11,6 +11,7 @@ FROM base
 COPY --from=builder /build/build /app/build
 # Python backend patches (not part of the npm build)
 COPY --from=builder /build/backend/open_webui/utils/middleware.py /app/backend/open_webui/utils/middleware.py
+COPY --from=builder /build/backend/open_webui/utils/character_personality.py /app/backend/open_webui/utils/character_personality.py
 COPY --from=builder /build/backend/open_webui/utils/task.py /app/backend/open_webui/utils/task.py
 COPY --from=builder /build/backend/open_webui/utils/tools.py /app/backend/open_webui/utils/tools.py
 # Patch tools.py — add has_tool_server_access stub (referenced by middleware.py but missing from fork)
@@ -46,4 +47,5 @@ RUN sed -i 's/from open_webui.routers import (/from open_webui.routers import (\
 RUN sed -i "s|app.include_router(tasks.router, prefix='/api/v1/tasks', tags=\['tasks'\])|app.include_router(scheduled_jobs.router, prefix='/api/v1/scheduled-jobs', tags=['scheduled-jobs'])\napp.include_router(tasks.router, prefix='/api/v1/tasks', tags=['tasks'])|" /app/backend/open_webui/main.py
 # Start scheduler loop in lifespan hook
 RUN sed -i 's/asyncio.create_task(periodic_usage_pool_cleanup())/asyncio.create_task(periodic_usage_pool_cleanup())\n    from open_webui.utils.scheduler import scheduler_loop\n    asyncio.create_task(scheduler_loop(app))/' /app/backend/open_webui/main.py
+RUN test -f /app/backend/open_webui/utils/character_personality.py && grep -q character_personality /app/backend/open_webui/utils/middleware.py
 LABEL description="Open WebUI with adaptive voice threshold"

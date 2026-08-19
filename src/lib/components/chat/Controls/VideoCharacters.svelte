@@ -96,7 +96,7 @@
 	{:else}
 		<div class="text-xs text-gray-500">
 			{$i18n.t(
-				'Attached characters make scenes use reference video. With none attached, scenes use text-to-video.'
+				'Attached profiles reinforce the AI personality on every reply and guide reference video scenes.'
 			)}
 		</div>
 
@@ -114,7 +114,7 @@
 					class="flex items-center gap-2 rounded-lg border p-1.5 text-left transition {isAttached
 						? 'border-gray-300 bg-gray-50 dark:border-gray-600 dark:bg-gray-850'
 						: 'border-gray-100 dark:border-gray-850'}"
-					disabled={busyId === character.id || character.image_file_ids.length === 0}
+					disabled={busyId === character.id}
 					on:click={() => toggle(character)}
 				>
 					{#if character.image_file_ids.length > 0}
