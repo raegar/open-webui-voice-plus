@@ -50,6 +50,10 @@ export const shortCodesToEmojis = writable(
 export const TTSWorker = writable(null);
 
 export const chatId = writable('');
+// Characters chosen in Controls before a chat exists. A new chat has no id until
+// its first message creates it, so the selection is buffered here and flushed by
+// initChatHandler once the id is known.
+export const pendingChatCharacterIds = writable<string[]>([]);
 export const chatTitle = writable('');
 
 export const channels = writable([]);

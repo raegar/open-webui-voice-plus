@@ -16,6 +16,7 @@
 
 	import {
 		chatId,
+		pendingChatCharacterIds,
 		chats,
 		config,
 		type Model,
@@ -106,6 +107,7 @@
 	import Sidebar from '../icons/Sidebar.svelte';
 	import Image from '../common/Image.svelte';
 	import { getBanners } from '$lib/apis/configs';
+	import { attachVideoCharacter } from '$lib/apis/videos';
 
 	export let chatIdProp = '';
 
@@ -1176,6 +1178,7 @@
 		resetInput();
 		await chatId.set('');
 		await chatTitle.set('');
+		pendingChatCharacterIds.set([]);
 
 		history = {
 			messages: {},
@@ -2580,6 +2583,27 @@
 		}
 	};
 
+	// Attach characters selected before the chat existed. Awaited inside
+	// initChatHandler, which itself is awaited before the completion request, so the
+	// very first reply already carries the profile rather than only later turns.
+	const flushPendingCharacters = async (targetChatId) => {
+		const pending = get(pendingChatCharacterIds);
+		if (!pending.length || !targetChatId || targetChatId.startsWith('local:')) {
+			return;
+		}
+		try {
+			for (const characterId of pending) {
+				await attachVideoCharacter(localStorage.token, targetChatId, characterId);
+			}
+		} catch (error) {
+			// A failed attach must never block the message being sent.
+			console.error(error);
+			toast.error(`${error}`);
+		} finally {
+			pendingChatCharacterIds.set([]);
+		}
+	};
+
 	const initChatHandler = async (history) => {
 		let _chatId = $chatId;
 
@@ -2602,6 +2626,7 @@
 
 			_chatId = chat.id;
 			await chatId.set(_chatId);
+			await flushPendingCharacters(_chatId);
 
 			window.history.replaceState(history.state, '', `/c/${_chatId}`);
 
