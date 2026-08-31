@@ -18,6 +18,7 @@
 	import VideoCamera from '$lib/components/icons/VideoCamera.svelte';
 	import { config, mobile, models, settings, showSidebar, user, WEBUI_NAME } from '$lib/stores';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
+	import { updateUserSettings } from '$lib/apis/users';
 
 	type WorkflowMode = 'text' | 'first' | 'first-last' | 'reference';
 	type FrameRole = 'first' | 'last';
@@ -78,6 +79,13 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 
 	let loaded = false;
 	let selectedModelId = '';
+	// When true the studio adopts the model of the chat a scene came from (the
+	// original behaviour). When false the saved default below is always used.
+	let useChatModel = true;
+	let savingModelPreference = false;
+	// Guards the persist watcher: set whenever the model is changed for us (initial
+	// load, or a scene handoff) so those do not overwrite the saved default.
+	let lastPersistedModel = '';
 	let workflowMode: WorkflowMode = 'text';
 	let creativeDirection = '';
 	let productionPrompt = '';
@@ -149,6 +157,28 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 		sceneVoices.length > 0 &&
 		productionPrompt.trim() !== '' &&
 		!promptHasDialogue(productionPrompt);
+
+	const persistModelPreference = async () => {
+		savingModelPreference = true;
+		try {
+			settings.set({
+				...$settings,
+				videoPromptUseChatModel: useChatModel,
+				videoPromptModel: selectedModelId
+			});
+			await updateUserSettings(localStorage.token, { ui: $settings });
+		} catch (error) {
+			toast.error(`The prompt model preference could not be saved: ${error}`);
+		} finally {
+			savingModelPreference = false;
+		}
+	};
+
+	// Selector does not dispatch a change event, so watch the value instead.
+	$: if (loaded && selectedModelId && selectedModelId !== lastPersistedModel) {
+		lastPersistedModel = selectedModelId;
+		void persistModelPreference();
+	}
 
 	const markPromptForReview = () => {
 		promptApproved = false;
@@ -497,9 +527,15 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 					.filter(Boolean)
 					.join('\n\n') || null;
 
-			// Prefer the model the chat was using; it already knows the house style.
-			if (handoff?.modelId && availableModels.some((model) => model.id === handoff.modelId)) {
+			// Only adopt the chat's model when the preference says to; otherwise the
+			// saved default already chosen in onMount stands.
+			if (
+				useChatModel &&
+				handoff?.modelId &&
+				availableModels.some((model) => model.id === handoff.modelId)
+			) {
 				selectedModelId = handoff.modelId;
+				lastPersistedModel = handoff.modelId;
 			}
 
 			// A roster turns this into a Ref2VA generation. Images arrive as file ids and
@@ -916,11 +952,19 @@ Write the final MiniMax H3 production brief now.`
 			await goto('/');
 			return;
 		}
+		useChatModel = $settings?.videoPromptUseChatModel ?? true;
+		// A saved default wins over the generic chat defaults, but only if the model
+		// still exists; a deleted model would otherwise leave the selector empty.
+		const savedModel = $settings?.videoPromptModel;
 		selectedModelId =
+			(savedModel && availableModels.some((model) => model.id === savedModel)
+				? savedModel
+				: undefined) ??
 			$settings?.models?.[0] ??
 			$config?.default_models?.split(',')?.[0] ??
 			availableModels[0]?.id ??
 			'';
+		lastPersistedModel = selectedModelId;
 		loaded = true;
 		const handoff = await consumeSceneHandoff();
 		await loadVideoHistory();
@@ -1229,6 +1273,18 @@ Write the final MiniMax H3 production brief now.`
 								className="w-full"
 								triggerClassName="text-sm"
 							/>
+							<label class="mt-1.5 flex items-center justify-end gap-1.5 text-[11px] text-gray-500">
+								<input
+									type="checkbox"
+									class="size-3 accent-gray-700"
+									bind:checked={useChatModel}
+									on:change={persistModelPreference}
+								/>
+								<span>Follow the chat's model</span>
+								{#if savingModelPreference}
+									<span class="text-gray-400">saving...</span>
+								{/if}
+							</label>
 						</div>
 					</div>
 					<textarea
