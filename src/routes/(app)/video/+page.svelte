@@ -90,7 +90,7 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	let creativeDirection = '';
 	let productionPrompt = '';
 	let promptApproved = false;
-	let aspectRatio: AspectRatio = '16:9';
+	let aspectRatio: AspectRatio = '9:16';
 	let megapixels: Megapixels = 0.2;
 	let duration: Duration = 10;
 	let seed: string | number | null = '';
