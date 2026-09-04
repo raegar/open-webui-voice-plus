@@ -22,6 +22,11 @@
 	// Mirrors the max_length on VideoCharacterForm; exceeding it is a 422 from the API.
 	const MAX_DESCRIPTION = 4000;
 	const MAX_NAME = 200;
+	const KINDS = [
+		{ value: 'character', label: 'Character' },
+		{ value: 'location', label: 'Location' },
+		{ value: 'outfit', label: 'Outfit' }
+	] as const;
 	// The Ref2VA node accepts at most 3 standalone ref_audios across the whole
 	// generation, so only three attached characters can be voiced in one scene.
 	const AUDIO_TYPES = [
@@ -84,6 +89,57 @@
 			toast.error(`${error}`);
 		} finally {
 			creating = false;
+		}
+	};
+
+	// "Alex" -> "Alex (copy)" -> "Alex (copy 2)". The base is trimmed so the
+	// suffix still fits inside MAX_NAME, which the API enforces as a 422.
+	const copyName = (base: string) => {
+		const taken = new Set(characters.map((c) => c.name));
+		const withSuffix = (suffix: string) =>
+			`${base.slice(0, Math.max(1, MAX_NAME - suffix.length))}${suffix}`;
+		let candidate = withSuffix(' (copy)');
+		let n = 2;
+		while (taken.has(candidate)) {
+			candidate = withSuffix(` (copy ${n})`);
+			n += 1;
+		}
+		return candidate;
+	};
+
+	// The copy points at the same uploaded files as the original. Deleting either
+	// character leaves those files in place, so the two never invalidate each other.
+	const duplicateCharacter = async (character: VideoCharacter) => {
+		busyId = character.id;
+		try {
+			const created = await createVideoCharacter(localStorage.token, {
+				name: copyName(character.name),
+				description: character.description,
+				image_file_ids: [...character.image_file_ids],
+				...(character.voice_file_id && { voice_file_id: character.voice_file_id })
+			});
+			characters = [...characters, created].sort((a, b) => a.name.localeCompare(b.name));
+			toast.success(`${created.name} added to your library.`);
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			busyId = null;
+		}
+	};
+
+	// Kind and applies_to save immediately; they are pickers, not free text.
+	const saveMeta = async (
+		character: VideoCharacter,
+		patch: { kind?: 'character' | 'location' | 'outfit'; applies_to_id?: string }
+	) => {
+		busyId = character.id;
+		try {
+			const updated = await updateVideoCharacter(localStorage.token, character.id, patch);
+			characters = characters.map((c) => (c.id === updated.id ? updated : c));
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			busyId = null;
 		}
 	};
 
@@ -349,9 +405,42 @@
 										<Spinner className="size-4" />
 									{/if}
 									<button
+										class="shrink-0 text-xs text-gray-500 hover:underline disabled:opacity-40 disabled:no-underline"
+										disabled={busyId === character.id}
+										on:click={() => duplicateCharacter(character)}>Duplicate</button
+									>
+									<button
 										class="shrink-0 text-xs text-gray-500 hover:underline"
 										on:click={() => confirmDelete(character)}>Delete</button
 									>
+								</div>
+
+								<div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+									<select
+										class="rounded-lg border border-gray-200 bg-transparent px-2 py-1 text-xs dark:border-gray-700"
+										value={character.kind ?? 'character'}
+										on:change={(e) => saveMeta(character, { kind: e.currentTarget.value })}
+									>
+										{#each KINDS as k}
+											<option value={k.value}>{k.label}</option>
+										{/each}
+									</select>
+									{#if (character.kind ?? 'character') === 'outfit'}
+										<select
+											class="rounded-lg border border-gray-200 bg-transparent px-2 py-1 text-xs dark:border-gray-700"
+											value={character.applies_to_id ?? ''}
+											on:change={(e) =>
+												saveMeta(character, { applies_to_id: e.currentTarget.value })}
+										>
+											<option value="">Not assigned</option>
+											{#each characters.filter((c) => (c.kind ?? 'character') === 'character') as person}
+												<option value={person.id}>Worn by {person.name}</option>
+											{/each}
+										</select>
+									{/if}
+									{#if (character.kind ?? 'character') !== 'character'}
+										<span class="text-gray-400">Scene reference, not a chat personality.</span>
+									{/if}
 								</div>
 
 								<textarea

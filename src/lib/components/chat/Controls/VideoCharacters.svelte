@@ -34,6 +34,11 @@
 	$: attached = library.filter((c) => selectedIds.includes(c.id));
 	$: usedImages = attached.reduce((sum, c) => sum + c.image_file_ids.length, 0);
 	$: usedVoices = attached.filter((c) => c.voice_file_id).length;
+	// Split the image budget so a location is not mistaken for cast headroom.
+	$: usedByPeople = attached
+		.filter((c) => (c.kind ?? 'character') === 'character')
+		.reduce((s, c) => s + c.image_file_ids.length, 0);
+	$: usedByRefs = usedImages - usedByPeople;
 
 	const imageUrl = (fileId: string) => `${WEBUI_API_BASE_URL}/files/${fileId}/content`;
 
@@ -145,7 +150,9 @@
 							{$i18n.t('No reference images')}
 						{:else}
 							{character.image_file_ids.length}
-							{$i18n.t('images')}{character.voice_file_id ? ` · ${$i18n.t('voice')}` : ''}
+							{$i18n.t('images')}{character.voice_file_id
+								? ` · ${$i18n.t('voice')}`
+								: ''}{(character.kind ?? 'character') !== 'character' ? ` · ${character.kind}` : ''}
 						{/if}
 					</div>
 				</div>
@@ -162,7 +169,8 @@
 		<div class="flex items-center justify-between text-[11px] text-gray-500">
 			<span
 				>{usedImages}/{MAX_REFERENCE_IMAGES}
-				{$i18n.t('images')} · {usedVoices}/{MAX_REFERENCE_AUDIOS}
+				{$i18n.t('images')}{usedByRefs > 0 ? ` (${usedByPeople} cast, ${usedByRefs} scene)` : ''}
+				· {usedVoices}/{MAX_REFERENCE_AUDIOS}
 				{$i18n.t('voices')}</span
 			>
 			<a href="/characters" class="underline">{$i18n.t('Manage')}</a>

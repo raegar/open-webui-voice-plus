@@ -147,12 +147,16 @@ export const videoGenerations = async (
 	}
 };
 
+export type ReferenceKind = 'character' | 'location' | 'outfit';
+
 export type VideoCharacter = {
 	id: string;
 	name: string;
 	description: string;
 	image_file_ids: string[];
 	voice_file_id: string;
+	kind: ReferenceKind;
+	applies_to_id: string;
 };
 
 const videoCharacterRequest = async (token: string, path: string, init: RequestInit = {}) => {
@@ -191,7 +195,14 @@ export const getChatVideoCharacters = async (
 
 export const createVideoCharacter = async (
 	token: string,
-	character: { name: string; description: string; image_file_ids: string[] }
+	character: {
+		name: string;
+		description: string;
+		image_file_ids: string[];
+		voice_file_id?: string;
+		kind?: ReferenceKind;
+		applies_to_id?: string;
+	}
 ): Promise<VideoCharacter> =>
 	await videoCharacterRequest(token, '/characters', {
 		method: 'POST',
@@ -201,7 +212,14 @@ export const createVideoCharacter = async (
 export const updateVideoCharacter = async (
 	token: string,
 	id: string,
-	patch: { name?: string; description?: string; image_file_ids?: string[]; voice_file_id?: string }
+	patch: {
+		name?: string;
+		description?: string;
+		image_file_ids?: string[];
+		voice_file_id?: string;
+		kind?: ReferenceKind;
+		applies_to_id?: string;
+	}
 ): Promise<VideoCharacter> =>
 	await videoCharacterRequest(token, `/characters/${id}`, {
 		method: 'POST',

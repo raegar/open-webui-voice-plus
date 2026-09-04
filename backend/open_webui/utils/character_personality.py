@@ -20,6 +20,12 @@ def build_character_personality_prompt(characters: Iterable[Any]) -> Optional[st
     """Build system guidance from attached profiles without including media data."""
     profiles = []
     for character in characters:
+        # Only people become assistant characterization. A location or an outfit
+        # shares this table but is scene reference material, and injecting one as a
+        # persona would have the assistant roleplaying as a room.
+        kind = _profile_value(character, "kind") or "character"
+        if kind != "character":
+            continue
         name = _profile_value(character, "name")
         description = _profile_value(character, "description")
         if not name or not description:

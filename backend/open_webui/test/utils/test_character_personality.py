@@ -55,3 +55,42 @@ def test_brian_without_a_description_adds_no_guidance():
     result = inject_character_personality(messages, [{"name": "Brian", "description": ""}])
 
     assert result == messages
+
+
+def _reference(name, description, kind):
+    return {"name": name, "description": description, "kind": kind}
+
+
+def test_location_reference_is_not_injected_as_a_persona():
+    """A room shares the character table but must never become the assistant."""
+    prompt = build_character_personality_prompt(
+        [_reference("The observatory", "A domed room of brass telescopes.", "location")]
+    )
+    assert prompt is None
+
+
+def test_outfit_reference_is_not_injected_as_a_persona():
+    prompt = build_character_personality_prompt(
+        [_reference("Red gown", "Floor-length crimson silk.", "outfit")]
+    )
+    assert prompt is None
+
+
+def test_characters_survive_alongside_scene_references():
+    prompt = build_character_personality_prompt(
+        [
+            _reference("Brian", "Dry, deadpan, endlessly patient.", "character"),
+            _reference("The observatory", "A domed room.", "location"),
+        ]
+    )
+    assert prompt is not None
+    assert "Brian" in prompt
+    assert "observatory" not in prompt
+
+
+def test_missing_kind_is_treated_as_a_character():
+    """Rows predating the kind column have no value and must still work."""
+    prompt = build_character_personality_prompt(
+        [{"name": "Brian", "description": "Dry and deadpan."}]
+    )
+    assert prompt is not None and "Brian" in prompt

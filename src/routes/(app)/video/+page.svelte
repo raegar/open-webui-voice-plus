@@ -424,50 +424,85 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	// Turn a handed-over roster into reference frames. The <Picture N> numbering is
 	// positional, so the summary must record which indices belong to which character
 	// or the model will attribute the wrong face to the wrong name.
+	// Turn a handed-over roster into reference frames. <Picture N> numbering is
+	// positional, so every entry records the indices it owns, or the model attributes
+	// the wrong picture to the wrong subject. Characters are emitted first so their
+	// indices stay stable when scene references are added or removed.
 	const loadCharacterReferences = async (
 		roster: {
 			name?: string;
 			description?: string;
 			imageFileIds?: string[];
 			voiceFileId?: string;
+			kind?: string;
+			appliesTo?: string;
 		}[]
 	): Promise<{ images: FrameAsset[]; voices: string[]; summary: string | null }> => {
 		const images: FrameAsset[] = [];
 		const voices: string[] = [];
-		const lines: string[] = [];
-		for (const character of roster) {
-			const fileIds = Array.isArray(character?.imageFileIds) ? character.imageFileIds : [];
+		const cast: string[] = [];
+		const settingRefs: string[] = [];
+		const wardrobe: string[] = [];
+
+		const isCharacter = (entry: { kind?: string }) => (entry?.kind ?? 'character') === 'character';
+		// Characters first, then references, preserving order within each group.
+		const ordered = [...roster.filter(isCharacter), ...roster.filter((e) => !isCharacter(e))];
+
+		for (const entry of ordered) {
+			const fileIds = Array.isArray(entry?.imageFileIds) ? entry.imageFileIds : [];
 			const indices: number[] = [];
 			for (const fileId of fileIds) {
 				if (images.length >= 9) break;
 				try {
-					const frame = await loadFrameFromFile(fileId, character?.name ?? 'character');
+					const frame = await loadFrameFromFile(fileId, entry?.name ?? 'reference');
 					images.push(frame);
 					indices.push(images.length);
 				} catch (error) {
 					console.error(error);
 				}
 			}
-			// A voice only earns an <Audio N> label if the character is actually shown;
-			// labelling an unseen character would confuse attribution.
-			let audioLabel = '';
-			if (indices.length > 0 && character?.voiceFileId && voices.length < MAX_REFERENCE_AUDIOS) {
-				try {
-					const voice = await loadFrameFromFile(character.voiceFileId, 'voice');
-					voices.push(voice.dataUrl);
-					audioLabel = ` Their speaking voice is <Audio ${voices.length}>.`;
-				} catch (error) {
-					console.error(error);
-				}
-			}
-			if (indices.length > 0) {
-				const pictures = indices.map((index) => `<Picture ${index}>`).join(', ');
-				lines.push(
-					`${character?.name ?? 'Unnamed'} — ${pictures}.${audioLabel} ${character?.description?.trim() || 'No written description provided; rely on the reference images.'}`
+			if (indices.length === 0) continue;
+
+			const pictures = indices.map((index) => `<Picture ${index}>`).join(', ');
+			const name = entry?.name ?? 'Unnamed';
+			const description =
+				entry?.description?.trim() || 'No written description provided; rely on the images.';
+			const kind = entry?.kind ?? 'character';
+
+			if (kind === 'location') {
+				settingRefs.push(
+					`${name} — ${pictures}. Mark fully_preserved. This is the environment the scene takes place in, not a person: it never speaks, moves of its own accord, or is treated as a subject. ${description}`
 				);
+			} else if (kind === 'outfit') {
+				const target = entry?.appliesTo || 'whichever person wears it';
+				wardrobe.push(
+					`${name} — ${pictures}. Mark attribute_transfer onto ${target}: take the garments only, never the face or body of whoever is pictured wearing them. ${description}`
+				);
+			} else {
+				// A voice only earns an <Audio N> label if the character is actually shown.
+				let audioLabel = '';
+				if (entry?.voiceFileId && voices.length < MAX_REFERENCE_AUDIOS) {
+					try {
+						const voice = await loadFrameFromFile(entry.voiceFileId, 'voice');
+						voices.push(voice.dataUrl);
+						audioLabel = ` Their speaking voice is <Audio ${voices.length}>.`;
+					} catch (error) {
+						console.error(error);
+					}
+				}
+				cast.push(`${name} — ${pictures}.${audioLabel} ${description}`);
 			}
 		}
-		return { images, voices, summary: lines.length ? lines.join('\n') : null };
+
+		const sections: string[] = [];
+		if (cast.length) sections.push('CAST' + NL + cast.join(NL));
+		if (settingRefs.length) sections.push('SETTING' + NL + settingRefs.join(NL));
+		if (wardrobe.length) sections.push('WARDROBE' + NL + wardrobe.join(NL));
+		return {
+			images,
+			voices,
+			summary: sections.length ? sections.join(NL + NL) : null
+		};
 	};
 
 	const loadFrameFromFile = async (fileId: string, label: string): Promise<FrameAsset> => {
@@ -602,7 +637,7 @@ ${frameMetadata()}
 ${
 	sceneCharacters
 		? `
-Cast for this scene. Each entry lists the reference pictures that show that character, so cite exactly those <Picture N> tags in subject_definitions and never attribute one character's pictures to another:
+Reference sheet for this scene, grouped by role. Each entry lists the pictures that show it, so cite exactly those <Picture N> tags in subject_definitions and never attribute one entry's pictures to another. CAST entries are people. SETTING entries are places and must be described as environment, never as a subject that acts or speaks. WARDROBE entries are clothing to place on the named person, taking garments only:
 ---
 ${sceneCharacters}
 ---

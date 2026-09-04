@@ -282,13 +282,19 @@
 		let characters = [];
 		if (chatId) {
 			try {
-				characters = (await getChatVideoCharacters(localStorage.token, chatId))
+				const attached = await getChatVideoCharacters(localStorage.token, chatId);
+				// An outfit names the character it belongs to, so resolve the id here where
+				// the whole roster is in hand rather than shipping ids the studio cannot read.
+				const nameById = new Map(attached.map((c) => [c.id, c.name]));
+				characters = attached
 					.filter((character) => (character?.image_file_ids ?? []).length > 0)
 					.map((character) => ({
 						name: character.name,
 						description: character.description,
 						imageFileIds: character.image_file_ids,
-						voiceFileId: character.voice_file_id ?? ''
+						voiceFileId: character.voice_file_id ?? '',
+						kind: character.kind ?? 'character',
+						appliesTo: nameById.get(character.applies_to_id ?? '') ?? ''
 					}));
 			} catch (error) {
 				// A roster lookup failure must not block the scene; fall back to text-to-video.

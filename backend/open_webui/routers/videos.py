@@ -277,6 +277,15 @@ async def list_chat_video_characters(
     return VideoCharacters.get_for_chat(user.id, chat_id)
 
 
+def _verify_applies_to(user, applies_to_id: str) -> None:
+    """An outfit may only reference a character the caller owns."""
+    if not applies_to_id:
+        return
+    target = VideoCharacters.get_by_id(user.id, applies_to_id)
+    if not target:
+        raise HTTPException(status_code=400, detail="Unknown character for this outfit")
+
+
 @router.post("/characters")
 async def create_video_character(
     request: Request,
@@ -287,6 +296,7 @@ async def create_video_character(
     _verify_owns_files(user, form_data.image_file_ids)
     if form_data.voice_file_id:
         _verify_owns_files(user, [form_data.voice_file_id])
+    _verify_applies_to(user, form_data.applies_to_id)
     return VideoCharacters.insert(user.id, form_data)
 
 
@@ -327,6 +337,10 @@ async def update_video_character(
         _verify_owns_files(user, form_data.image_file_ids)
     if form_data.voice_file_id:
         _verify_owns_files(user, [form_data.voice_file_id])
+    if form_data.applies_to_id:
+        if form_data.applies_to_id == character_id:
+            raise HTTPException(status_code=400, detail="An outfit cannot apply to itself")
+        _verify_applies_to(user, form_data.applies_to_id)
     character = VideoCharacters.update(user.id, character_id, form_data)
     if not character:
         raise HTTPException(status_code=404, detail="Character not found")

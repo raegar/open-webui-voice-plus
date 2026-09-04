@@ -15,7 +15,7 @@ row into a library character plus an attachment.
 import json
 import logging
 import time
-from typing import Optional
+from typing import Literal, Optional
 from uuid import uuid4
 
 from open_webui.internal.db import Base, engine, get_db
@@ -32,6 +32,12 @@ MAX_IMAGES_PER_CHARACTER = 3
 # images, so a chat can carry only three voiced characters.
 MAX_REFERENCE_AUDIOS = 3
 
+# A library entry is either a person or a scene reference. Ref2VA's
+# subject_definitions already covers "identities, scenes, or styles", so these all
+# become <Subject N> citations; the kind only decides how we describe them and
+# which retention_analysis marker we suggest.
+REFERENCE_KINDS = ("character", "location", "outfit")
+
 
 class VideoCharacter(Base):
     __tablename__ = "video_character"
@@ -47,6 +53,10 @@ class VideoCharacter(Base):
     position = Column(Integer, nullable=False, default=0)
     # Single file id of a voice reference, or "" for none.
     voice_file_id = Column(String, nullable=False, default="")
+    # character | location | outfit. See REFERENCE_KINDS.
+    kind = Column(String, nullable=False, default="character")
+    # For an outfit: the character it belongs to, or "" when unassigned.
+    applies_to_id = Column(String, nullable=False, default="")
     created_at = Column(BigInteger, nullable=False)
     updated_at = Column(BigInteger, nullable=False)
 
@@ -69,6 +79,8 @@ class VideoCharacterModel(BaseModel):
     description: str
     image_file_ids: list[str]
     voice_file_id: str
+    kind: str
+    applies_to_id: str
     created_at: int
     updated_at: int
 
@@ -78,6 +90,8 @@ class VideoCharacterForm(BaseModel):
     description: str = Field(default="", max_length=4000)
     image_file_ids: list[str] = Field(default_factory=list)
     voice_file_id: str = ""
+    kind: Literal["character", "location", "outfit"] = "character"
+    applies_to_id: str = ""
 
 
 class VideoCharacterUpdateForm(BaseModel):
@@ -85,6 +99,8 @@ class VideoCharacterUpdateForm(BaseModel):
     description: Optional[str] = Field(default=None, max_length=4000)
     image_file_ids: Optional[list[str]] = None
     voice_file_id: Optional[str] = None
+    kind: Optional[Literal["character", "location", "outfit"]] = None
+    applies_to_id: Optional[str] = None
 
 
 def _to_model(row: VideoCharacter) -> VideoCharacterModel:
@@ -99,6 +115,8 @@ def _to_model(row: VideoCharacter) -> VideoCharacterModel:
         description=row.description or "",
         image_file_ids=[i for i in file_ids if isinstance(i, str)],
         voice_file_id=row.voice_file_id or "",
+        kind=row.kind if row.kind in REFERENCE_KINDS else "character",
+        applies_to_id=row.applies_to_id or "",
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -131,6 +149,8 @@ class VideoCharactersTable:
                 description=form.description.strip(),
                 image_file_ids=json.dumps(form.image_file_ids[:MAX_IMAGES_PER_CHARACTER]),
                 voice_file_id=form.voice_file_id or "",
+                kind=form.kind,
+                applies_to_id=form.applies_to_id or "",
                 position=0,
                 created_at=now,
                 updated_at=now,
@@ -157,6 +177,10 @@ class VideoCharactersTable:
                 )
             if form.voice_file_id is not None:
                 row.voice_file_id = form.voice_file_id
+            if form.kind is not None:
+                row.kind = form.kind
+            if form.applies_to_id is not None:
+                row.applies_to_id = form.applies_to_id
             row.updated_at = int(time.time())
             db.commit()
             db.refresh(row)
@@ -168,6 +192,11 @@ class VideoCharactersTable:
             db.query(VideoChatCharacter).filter_by(
                 user_id=user_id, character_id=id
             ).delete()
+            # Outfits that pointed at this character become unassigned rather than
+            # dangling, so they still render as a generic wardrobe reference.
+            db.query(VideoCharacter).filter_by(
+                user_id=user_id, applies_to_id=id
+            ).update({"applies_to_id": ""})
             deleted = db.query(VideoCharacter).filter_by(id=id, user_id=user_id).delete()
             db.commit()
             return bool(deleted)
@@ -256,18 +285,22 @@ def _add_missing_columns() -> None:
     """
     try:
         existing = {c["name"] for c in inspect(engine).get_columns("video_character")}
-        if "voice_file_id" in existing:
+        wanted = {
+            "voice_file_id": "VARCHAR NOT NULL DEFAULT ''",
+            "kind": "VARCHAR NOT NULL DEFAULT 'character'",
+            "applies_to_id": "VARCHAR NOT NULL DEFAULT ''",
+        }
+        missing = {n: d for n, d in wanted.items() if n not in existing}
+        if not missing:
             return
         with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "ALTER TABLE video_character "
-                    "ADD COLUMN voice_file_id VARCHAR NOT NULL DEFAULT ''"
+            for name, definition in missing.items():
+                connection.execute(
+                    text(f"ALTER TABLE video_character ADD COLUMN {name} {definition}")
                 )
-            )
-        log.info("Added video_character.voice_file_id")
+        log.info("Added video_character columns: %s", ", ".join(missing))
     except Exception:
-        log.exception("Could not add video_character.voice_file_id")
+        log.exception("Could not add missing video_character columns")
 
 
 def _migrate_chat_scoped_characters() -> None:
