@@ -440,6 +440,9 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	): Promise<{ images: FrameAsset[]; voices: string[]; summary: string | null }> => {
 		const images: FrameAsset[] = [];
 		const voices: string[] = [];
+		// Built with an explicit constant rather than an inline escape: this file has
+		// been bitten twice by escaping in edit tooling.
+		const NL = '\n';
 		const cast: string[] = [];
 		const settingRefs: string[] = [];
 		const wardrobe: string[] = [];
