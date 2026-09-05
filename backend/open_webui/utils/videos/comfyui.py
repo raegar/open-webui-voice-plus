@@ -16,6 +16,70 @@ class ComfyUIVideoError(RuntimeError):
 # MiniMaxH3ReferenceToVideo caps standalone ref_audios at 3 (see its Autogrow template).
 MAX_REFERENCE_AUDIOS = 3
 
+# Optional acceleration/motion path, off unless a request asks for it. The base
+# graph is left exactly as it was so turning the toggle off reproduces the known
+# good 20-step res_multistep result without a rebuild.
+MOTION_LORA_NAME = "hmmotion_minimax-h3_epoch12.safetensors"
+TURBO_LORA_NAME = "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
+# Settings recommended alongside the hmmotion LoRA.
+MOTION_LORA_STRENGTH = 1.0
+TURBO_LORA_STRENGTH = 0.5
+MOTION_SAMPLER = "euler"
+MOTION_STEPS = 12
+MOTION_SHIFT_VIDEO = 6.0
+# Not part of the recommendation; this is MiniMaxH3SigmaShift's own default.
+MOTION_SHIFT_AUDIO = 3.0
+# Node ids for the inserted chain, chosen well clear of the graph's own ids.
+_LORA_MOTION_NODE = "901"
+_LORA_TURBO_NODE = "902"
+_SHIFT_NODE = "903"
+
+
+def apply_motion_loras(
+    workflow: dict,
+    unet_node_id: str,
+    model_consumer_ids: "list[str]",
+    sampler_node_id: str,
+    scheduler_node_id: str,
+) -> dict:
+    """Splice hmmotion + turbo LoRAs and a sigma shift between the UNet and the
+    nodes that consume it, then switch the sampler to what those LoRAs expect.
+
+    Both LoRAs are model-only, so the CLIP path is untouched.
+    """
+    workflow[_LORA_MOTION_NODE] = {
+        "inputs": {
+            "model": [unet_node_id, 0],
+            "lora_name": MOTION_LORA_NAME,
+            "strength_model": MOTION_LORA_STRENGTH,
+        },
+        "class_type": "LoraLoaderModelOnly",
+        "_meta": {"title": "Load hmmotion LoRA"},
+    }
+    workflow[_LORA_TURBO_NODE] = {
+        "inputs": {
+            "model": [_LORA_MOTION_NODE, 0],
+            "lora_name": TURBO_LORA_NAME,
+            "strength_model": TURBO_LORA_STRENGTH,
+        },
+        "class_type": "LoraLoaderModelOnly",
+        "_meta": {"title": "Load turbo LoRA"},
+    }
+    workflow[_SHIFT_NODE] = {
+        "inputs": {
+            "model": [_LORA_TURBO_NODE, 0],
+            "shift_video": MOTION_SHIFT_VIDEO,
+            "shift_audio": MOTION_SHIFT_AUDIO,
+        },
+        "class_type": "MiniMaxH3SigmaShift",
+        "_meta": {"title": "MiniMax H3 Sigma Shift"},
+    }
+    for node_id in model_consumer_ids:
+        workflow[node_id]["inputs"]["model"] = [_SHIFT_NODE, 0]
+    workflow[sampler_node_id]["inputs"]["sampler_name"] = MOTION_SAMPLER
+    workflow[scheduler_node_id]["inputs"]["steps"] = MOTION_STEPS
+    return workflow
+
 RESOLUTIONS = {
     ("16:9", 0.2): (608, 352),
     ("16:9", 0.4): (864, 480),
@@ -34,6 +98,7 @@ def build_minimax_h3_workflow(
     seed: int,
     first_frame_name: Optional[str] = None,
     last_frame_name: Optional[str] = None,
+    motion_loras: bool = False,
 ) -> dict:
     try:
         width, height = RESOLUTIONS[(aspect_ratio, megapixels)]
@@ -178,6 +243,9 @@ def build_minimax_h3_workflow(
         }
         workflow["105:104"]["inputs"]["last_frame"] = ["115", 0]
 
+    if motion_loras:
+        apply_motion_loras(workflow, "105:6", ["105:16", "105:9"], "105:17", "105:9")
+
     return workflow
 
 
@@ -189,6 +257,7 @@ def build_minimax_h3_reference_workflow(
     seed: int,
     reference_image_names: Sequence[str],
     reference_audio_names: Sequence[str] = (),
+    motion_loras: bool = False,
 ) -> dict:
     """Build the official MiniMax H3 Ref2VA image-reference graph."""
     if not 1 <= len(reference_image_names) <= 9:
@@ -347,6 +416,9 @@ def build_minimax_h3_reference_workflow(
         }
         workflow["136"]["inputs"][f"ref_audios.ref_audio_{index}"] = [node_id, 0]
 
+    if motion_loras:
+        apply_motion_loras(workflow, "127", ["126", "124"], "123", "124")
+
     return workflow
 
 
@@ -432,6 +504,7 @@ class ComfyUIVideoClient:
         last_frame: Optional[tuple[bytes, str, str]] = None,
         reference_images: Optional[Sequence[tuple[bytes, str, str]]] = None,
         reference_audios: Optional[Sequence[tuple[bytes, str, str]]] = None,
+        motion_loras: bool = False,
     ) -> tuple[bytes, str, str]:
         first_frame_name = await self.upload_image(*first_frame) if first_frame else None
         last_frame_name = await self.upload_image(*last_frame) if last_frame else None
@@ -454,6 +527,7 @@ class ComfyUIVideoClient:
                 seed,
                 reference_image_names,
                 reference_audio_names,
+                motion_loras,
             )
         else:
             workflow = build_minimax_h3_workflow(
@@ -464,6 +538,7 @@ class ComfyUIVideoClient:
                 seed,
                 first_frame_name,
                 last_frame_name,
+                motion_loras,
             )
         response = await self._request(
             "POST",

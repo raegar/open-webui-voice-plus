@@ -247,3 +247,41 @@ def test_reference_workflow_without_voices_has_no_audio_nodes():
     )
     assert not [n for n in workflow.values() if n.get("class_type") == "LoadAudio"]
     assert not [k for k in workflow["136"]["inputs"] if k.startswith("ref_audios.")]
+
+
+def test_motion_loras_are_absent_unless_requested():
+    """The known-good path must stay byte-identical when the toggle is off."""
+    for workflow in (
+        build_minimax_h3_workflow("p", "9:16", 0.2, 10, 1),
+        build_minimax_h3_reference_workflow("p", "9:16", 0.2, 10, 1, ["a.png"]),
+    ):
+        assert not [n for n in workflow.values() if n["class_type"] == "LoraLoaderModelOnly"]
+        assert not [n for n in workflow.values() if n["class_type"] == "MiniMaxH3SigmaShift"]
+    base = build_minimax_h3_workflow("p", "9:16", 0.2, 10, 1)
+    assert base["105:17"]["inputs"]["sampler_name"] == "res_multistep"
+    assert base["105:9"]["inputs"]["steps"] == 20
+
+
+def test_motion_loras_chain_in_order_and_retune_the_sampler():
+    workflow = build_minimax_h3_workflow("p", "9:16", 0.2, 10, 1, motion_loras=True)
+    # UNet -> hmmotion -> turbo -> shift -> guider/scheduler.
+    assert workflow["901"]["inputs"]["model"] == ["105:6", 0]
+    assert workflow["902"]["inputs"]["model"] == ["901", 0]
+    assert workflow["903"]["inputs"]["model"] == ["902", 0]
+    assert workflow["105:16"]["inputs"]["model"] == ["903", 0]
+    assert workflow["105:9"]["inputs"]["model"] == ["903", 0]
+    assert workflow["902"]["inputs"]["strength_model"] == 0.5
+    assert workflow["903"]["inputs"]["shift_video"] == 6.0
+    assert workflow["105:17"]["inputs"]["sampler_name"] == "euler"
+    assert workflow["105:9"]["inputs"]["steps"] == 12
+
+
+def test_motion_loras_apply_to_the_reference_workflow_too():
+    workflow = build_minimax_h3_reference_workflow(
+        "p", "9:16", 0.2, 10, 1, ["a.png"], motion_loras=True
+    )
+    assert workflow["901"]["inputs"]["model"] == ["127", 0]
+    assert workflow["126"]["inputs"]["model"] == ["903", 0]
+    assert workflow["124"]["inputs"]["model"] == ["903", 0]
+    assert workflow["123"]["inputs"]["sampler_name"] == "euler"
+    assert workflow["124"]["inputs"]["steps"] == 12

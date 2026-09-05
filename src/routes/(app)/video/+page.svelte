@@ -92,6 +92,9 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	let promptApproved = false;
 	let aspectRatio: AspectRatio = '9:16';
 	let megapixels: Megapixels = 0.2;
+	// Opt-in hmmotion + turbo LoRA path. Off reproduces the known-good 20-step
+	// res_multistep graph exactly, so switching back needs no rebuild.
+	let motionLoras = false;
 	let duration: Duration = 10;
 	let seed: string | number | null = '';
 	let firstFrame: FrameAsset | null = null;
@@ -841,6 +844,7 @@ Write the final MiniMax H3 production brief now.`
 			jobId = createJobId();
 			options = {
 				mode: workflowMode === 'reference' ? 'reference' : 'text',
+				motion_loras: motionLoras,
 				aspect_ratio: aspectRatio,
 				megapixels,
 				duration,
@@ -1289,6 +1293,24 @@ Write the final MiniMax H3 production brief now.`
 							<p class="mt-1.5 text-xs text-gray-500">
 								Leave this blank to let each generation pick a new random seed.
 							</p>
+						</div>
+
+						<div class="sm:col-span-2 lg:col-span-4">
+							<label class="flex items-start gap-2 text-xs">
+								<input
+									type="checkbox"
+									class="mt-0.5 size-3.5 accent-gray-700"
+									bind:checked={motionLoras}
+								/>
+								<span>
+									<span class="font-medium">Motion LoRA (experimental)</span>
+									<span class="block text-gray-500">
+										hmmotion + turbo LoRAs at euler / 12 steps / shift 6, turbo strength 0.5. Faster
+										and more motion, but a different look. Untick to return to the known-good
+										20-step res_multistep result.
+									</span>
+								</span>
+							</label>
 						</div>
 					</div>
 				</section>

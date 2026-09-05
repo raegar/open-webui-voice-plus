@@ -77,6 +77,33 @@ The live container therefore pins `COMFYUI_VIDEO_TIMEOUT=2400`. The deploy scrip
 
 **Known gap:** a timed-out job is abandoned rather than recoverable. The ComfyUI `prompt_id` is not recorded anywhere, and ComfyUI's own `/history` is in-memory and lost on restart, so once the poll gives up there is no way to reclaim the render short of importing the file by hand. Storing `prompt_id` on the job would make a timed-out generation resumable, and is the right fix if long renders stay common.
 
+### Motion LoRAs (opt-in) and how to roll back
+
+`Motion LoRA (experimental)` in the studio's generation settings splices two
+model-only LoRAs and a sigma shift between the UNet and the nodes that consume it,
+then retunes the sampler:
+
+```text
+UNet -> hmmotion_minimax-h3_epoch12 (1.0) -> minimax_h3_fl2v_turbo_8step (0.5)
+     -> MiniMaxH3SigmaShift(shift_video=6, shift_audio=3) -> BasicGuider + BasicScheduler
+sampler_name: euler   steps: 12
+```
+
+The LoRA files live in `C:\AI\ComfyUI-H3\models\loras\`. Both workflow builders
+support the flag; node ids differ between them (`105:6/105:16/105:9/105:17` for the
+text graph, `127/126/124/123` for the reference graph), which is why
+`apply_motion_loras` takes them as arguments.
+
+**Rolling back is a toggle, not a rebuild.** With the box unticked the graph is
+byte-identical to the known-good 20-step `res_multistep` path, and tests assert
+that no LoRA or shift node appears. Deeper fallbacks if ever needed:
+
+- Image: `open-webui-voice-plus:pre-lora` is the last build before this change.
+- Commit: tag `known-good-minimax-20s` (`0c3b95302`).
+- The LoRA files are additive; deleting them only breaks the toggle's ON path.
+
+Baseline for comparison: roughly 4 minutes per 10s clip at 20 steps.
+
 ### Not yet exposed: ref_image_size
 
 The reference node takes `ref_image_size`, currently hardcoded to `"match"`. Its tooltip: `'max'` uses the reference pipeline's 2048px short edge for best identity fidelity, and because reference tokens ride through every sampling step, `'max'` can be several times slower. Worth exposing as a quality toggle if character likeness ever drifts. `ref_videos` and `ref_video_audios` are also unused and would allow motion/soundtrack references.
@@ -167,6 +194,38 @@ Frame count is derived from duration at 24 fps and rounded to the workflow’s r
 
 Production T2V/I2V prompts use contiguous `[Xs-Ys]` segments covering the exact duration, with 2-3 segments around 5 seconds and 4-5 around 10 seconds. Ref2VA prompts use the six-section template `subject_definitions`, `summary`, `retention_analysis`, `detailed_description`, `overall_soundscape`, and `non_diegetic_music`. Keep Picture labels stable and in upload order.
 
+### Autostart and crash watchdog
+
+ComfyUI is a native Windows install at `C:\AI\ComfyUI-H3`, not a container. It is launched by the scheduled task `ComfyUI-H3-Autostart`, which runs `start_h3_autostart.bat` — the same flags as `start_h3.bat` but without `--auto-launch` and without `pause`.
+
+The task has two triggers: at logon (30 s delay), and a time trigger repeating every 5 minutes indefinitely. That repetition is the crash watchdog. `start_h3_autostart.bat` opens with a `netstat` guard that exits 0 when something is already listening on 8188, so a tick while ComfyUI is healthy is a no-op and only a tick after a crash actually launches it. Keep the repetition on one trigger only — putting it on both fires the task twice per interval.
+
+Task Scheduler's own `RestartCount` cannot do this job: the action returns as soon as it has spawned the process, so every run is recorded as success and a crash never looks like a failure.
+
+**The action must invoke the batch file through `cmd.exe /c`:**
+
+```text
+cmd.exe /c start "MiniMax H3 - ComfyUI" /min cmd.exe /c C:\AI\ComfyUI-H3\start_h3_autostart.bat
+```
+
+`START` runs a *batch file* with `cmd /k`, which deliberately leaves the console window open after the script exits — documented in `start /?`. Pointing the action straight at the `.bat` therefore strands a dead window on the desktop at every no-op tick, twelve an hour. Naming `cmd.exe` as the target makes `START` treat it as a program and use `/c`, so the window closes. The tradeoff is that a failed launch no longer leaves its error on screen; read `user\comfyui.log` and the Windows Application event log instead.
+
+ComfyUI crashes are a known, separate problem: `python.exe` / `python312.dll`, exception `0xC0000005`, typically during VAE decode, on a 32 GB machine using the launcher's conservative sub-48 GB flag path. The watchdog restores the service within 5 minutes, but any generation in flight is lost.
+
+**A ComfyUI outage surfaces in OWUI as a misleading error.** `host.docker.internal` resolves to both an IPv4 and an IPv6 address inside the container, and Python reports the IPv6 attempt, so the user sees `[Errno 101] Network is unreachable` against `/upload/image` rather than a connection refused. That reads like broken Docker networking. Check whether anything is listening on 8188 before investigating the network.
+
+## OpenRouter preset connections
+
+Two OpenRouter presets are wired into chat: `@preset/deep-seek-rp` (resolves to `deepseek/deepseek-v3.2`) and `@preset/glmrp` (resolves to `z-ai/glm-5.2`). OpenRouter accepts a preset as the model string in the form `@preset/<slug>` or `<provider>/<model>@preset/<slug>`, and OWUI forwards the model string verbatim, stripping only a configured `prefix_id`.
+
+They live on a **second** OpenRouter connection whose `model_ids` list holds nothing but the preset strings. This matters: when a connection's `model_ids` is non-empty, `get_all_models` stops calling `/models` for that connection and synthesises the list from those strings alone (`backend/open_webui/routers/openai.py`). Adding a preset to the existing catalogue connection would collapse OpenRouter down to that one entry. The catalogue connection keeps an empty `model_ids`; the preset connection carries the same base URL and key. New presets are appended to the preset connection's list rather than given a connection of their own.
+
+A model id must appear in `request.app.state.OPENAI_MODELS` or `/chat/completions` returns 404, so a Workspace model whose `base_model_id` is an unregistered preset string will not work by itself.
+
+**This configuration lives only in the config DB**, not in `docker-compose.yaml` or any versioned file — the same exposure as the environment loss described under Deployment. Prefer the admin UI. If you must edit directly: back up `webui.db` with SQLite's backup API, stop the container, edit the single `config` row from a throwaway container mounting the `open-webui` volume, then `docker compose up -d`. Editing while the container is running risks the live in-memory config being written back over the change.
+
+OpenRouter applies request-level fields over preset fields, so OWUI Advanced Params set on these models override whatever the preset specifies — leave them at default. The fork's `character_personality` system-message injection likewise takes precedence over a preset's own system prompt.
+
 ## Verification commands
 
 Run from `C:\\AI\\open-webui-voice-plus`:
@@ -197,6 +256,16 @@ The authenticated history smoke test should verify that `/api/v1/videos/history`
 **Use `docker compose up -d`.** `docker-compose.yaml` is the source of truth: it pins the image, the external `open-webui` volume, the `E:` bind, the restart policy, and the environment including `WEBUI_SECRET_KEY` and `COMFYUI_VIDEO_TIMEOUT`.
 
 ```powershell
+docker build --pull=false -t open-webui-voice-plus:latest .
+docker compose up -d
+```
+
+**`docker compose up -d` consumes a container you renamed for rollback.** The safety pattern in the legacy procedure below — rename `open-webui` to `open-webui-rollback` before starting the replacement — does not survive a compose deploy. Compose matches containers by its own project/service labels rather than by name, so it finds the renamed container, reports `Container open-webui-rollback Recreated`, removes it, and creates the new `open-webui`. The rollback is gone before the replacement is proven. Building `:latest` also overwrites the previous image tag, so the old image is no longer addressable either, and rolling back means checking out the previous commit and rebuilding.
+
+For a deploy where you actually want a fallback, tag the running image under a distinct name *before* building:
+
+```powershell
+docker tag open-webui-voice-plus:latest open-webui-voice-plus:pre-<date>
 docker build --pull=false -t open-webui-voice-plus:latest .
 docker compose up -d
 ```

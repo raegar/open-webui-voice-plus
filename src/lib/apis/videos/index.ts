@@ -10,6 +10,7 @@ export type VideoGenerationOptions = {
 	last_frame_data_url?: string;
 	reference_image_data_urls?: string[];
 	reference_audio_data_urls?: string[];
+	motion_loras?: boolean;
 };
 
 export type VideoGenerationJob = {
