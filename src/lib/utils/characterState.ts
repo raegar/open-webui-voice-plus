@@ -4,10 +4,11 @@ import { generateOpenAIChatCompletion } from '$lib/apis/openai';
 import { getChatVideoCharacters, setVideoCharacterState } from '$lib/apis/videos';
 import { characterStateVersion, settings } from '$lib/stores';
 
-// Only the tail of the conversation is considered. Re-deriving state from the whole
-// history every turn would be expensive and would let one bad reading persist; the
-// stored state already carries everything established before this exchange.
-const TURNS_CONSIDERED = 4;
+// The automatic pass runs every turn, so it stays cheap and only looks at the latest
+// exchange. A manual refresh is deliberate and infrequent, so it can afford a much
+// wider window — which is what catches changes the narrow automatic pass missed.
+const AUTO_TURNS = 4;
+const MANUAL_TURNS = 24;
 // Matches the max_length on the API's state field.
 const MAX_STATE = 2000;
 
@@ -60,11 +61,14 @@ const parseStates = (raw: string): Record<string, string> => {
 export const syncCharacterState = async (
 	chatId: string,
 	modelId: string,
-	messages: { role: string; content: unknown }[]
-) => {
+	messages: { role: string; content: unknown }[],
+	options: { manual?: boolean } = {}
+): Promise<{ updated: string[] } | null> => {
+	const manual = options.manual === true;
 	try {
-		if (!chatId || chatId.startsWith('local:') || !modelId) return;
-		if ((get(settings) as any)?.autoTrackCharacterState === false) return;
+		if (!chatId || chatId.startsWith('local:') || !modelId) return null;
+		// A manual refresh is an explicit request, so it ignores the automatic setting.
+		if (!manual && (get(settings) as any)?.autoTrackCharacterState === false) return null;
 
 		const attached = await getChatVideoCharacters(localStorage.token, chatId);
 		const tracked: TrackedCharacter[] = attached
@@ -75,14 +79,14 @@ export const syncCharacterState = async (
 				description: c.description ?? '',
 				state: c.state ?? ''
 			}));
-		if (tracked.length === 0) return;
+		if (tracked.length === 0) return { updated: [] };
 
 		const recent = messages
-			.slice(-TURNS_CONSIDERED)
+			.slice(-(manual ? MANUAL_TURNS : AUTO_TURNS))
 			.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${asText(m.content).trim()}`)
 			.filter((line) => line.length > 12)
 			.join('\n\n');
-		if (!recent) return;
+		if (!recent) return { updated: [] };
 
 		const roster = tracked
 			.map(
@@ -104,10 +108,10 @@ export const syncCharacterState = async (
 		});
 
 		const content = response?.choices?.[0]?.message?.content;
-		if (typeof content !== 'string' || !content.trim()) return;
+		if (typeof content !== 'string' || !content.trim()) return { updated: [] };
 
 		const updates = parseStates(content);
-		let changed = false;
+		const updated: string[] = [];
 		for (const character of tracked) {
 			const next = updates[character.name];
 			// Only a non-empty string that actually differs counts as a change, so a
@@ -116,11 +120,15 @@ export const syncCharacterState = async (
 			const value = next.trim().slice(0, MAX_STATE);
 			if (!value || value === character.state) continue;
 			await setVideoCharacterState(localStorage.token, chatId, character.id, value);
-			changed = true;
+			updated.push(character.name);
 		}
 		// Let an open Controls pane pick the new values up rather than showing stale text.
-		if (changed) characterStateVersion.update((n) => n + 1);
+		if (updated.length) characterStateVersion.update((n) => n + 1);
+		return { updated };
 	} catch (error) {
 		console.error('Character state sync failed', error);
+		// A manual run reports failure; the automatic one stays silent by design.
+		if (manual) throw error;
+		return null;
 	}
 };

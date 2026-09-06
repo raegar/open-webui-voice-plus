@@ -14,10 +14,15 @@
 	import { characterStateVersion, pendingChatCharacterIds, settings } from '$lib/stores';
 	import { updateUserSettings } from '$lib/apis/users';
 	import Spinner from '$lib/components/common/Spinner.svelte';
+	import { createMessagesList } from '$lib/utils';
+	import { syncCharacterState } from '$lib/utils/characterState';
 
 	const i18n: any = getContext('i18n');
 
 	export let chatId: string | null = null;
+	// Supplied so a manual refresh can read the conversation it is summarising.
+	export let history: any = undefined;
+	export let modelId: string | null = null;
 
 	// Ref2VA accepts at most 9 images in total, addressed as <Picture 1>..<Picture N>.
 	const MAX_REFERENCE_IMAGES = 9;
@@ -34,6 +39,7 @@
 	let states: Record<string, string> = {};
 	let savingState: string | null = null;
 	let seenStateVersion = 0;
+	let refreshingStates = false;
 	$: autoTrack = ($settings as any)?.autoTrackCharacterState !== false;
 
 	// Before the first message a chat has no id, so the selection is buffered in a
@@ -79,6 +85,30 @@
 		seenStateVersion = $characterStateVersion;
 		if (chatId) void load(chatId);
 	}
+
+	// Reads a far wider slice of the conversation than the per-turn pass, which is
+	// what picks up changes that pass went past.
+	const refreshStates = async () => {
+		if (!chatId || !modelId || !history?.currentId) {
+			toast.error($i18n.t('Send a message first.'));
+			return;
+		}
+		refreshingStates = true;
+		try {
+			const messages = createMessagesList(history, history.currentId);
+			const result = await syncCharacterState(chatId, modelId, messages, { manual: true });
+			const updated = result?.updated ?? [];
+			if (updated.length) {
+				toast.success(`${$i18n.t('Updated')}: ${updated.join(', ')}`);
+			} else {
+				toast.info($i18n.t('No clothing changes found in the recent conversation.'));
+			}
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			refreshingStates = false;
+		}
+	};
 
 	const setAutoTrack = async (enabled: boolean) => {
 		try {
@@ -230,5 +260,14 @@
 			/>
 			{$i18n.t('Track what they are wearing automatically')}
 		</label>
+		<button
+			class="w-full rounded-lg border border-gray-200 px-2 py-1.5 text-[11px] font-medium hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-850"
+			disabled={refreshingStates || !chatId}
+			on:click={refreshStates}
+		>
+			{refreshingStates
+				? $i18n.t('Checking the conversation…')
+				: $i18n.t('Update outfits from conversation')}
+		</button>
 	{/if}
 </div>

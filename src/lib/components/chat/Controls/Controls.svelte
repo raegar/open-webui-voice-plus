@@ -16,6 +16,9 @@
 	export let params = {};
 	export let embed = false;
 	export let chatId: string | null = null;
+	// Passed through to the character pane so its refresh can read the conversation.
+	export let history: any = undefined;
+	export let modelId: string | null = null;
 
 	// Persist collapsible section open/close state
 	const getOpen = (key: string, fallback = true): boolean => {
@@ -59,7 +62,7 @@
 					buttonClassName="w-full"
 				>
 					<div slot="content">
-						<VideoCharacters {chatId} />
+						<VideoCharacters {chatId} {history} {modelId} />
 					</div>
 				</Collapsible>
 
