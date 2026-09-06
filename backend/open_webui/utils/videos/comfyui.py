@@ -41,33 +41,48 @@ def apply_motion_loras(
     model_consumer_ids: "list[str]",
     sampler_node_id: str,
     scheduler_node_id: str,
+    motion_lora: bool = True,
+    turbo_lora: bool = True,
 ) -> dict:
-    """Splice hmmotion + turbo LoRAs and a sigma shift between the UNet and the
-    nodes that consume it, then switch the sampler to what those LoRAs expect.
+    """Splice the requested LoRAs and a sigma shift between the UNet and the nodes
+    that consume it, then switch the sampler to the accelerated settings.
 
-    Both LoRAs are model-only, so the CLIP path is untouched.
+    The sampler settings are deliberately identical for every combination. The
+    euler / 12 step / shift 6 figures come from the hmmotion recommendation, and
+    holding them constant means switching a LoRA on or off changes only which
+    weights are loaded, so the comparison isolates the LoRA. Both LoRAs are
+    model-only, so the CLIP path is untouched.
     """
-    workflow[_LORA_MOTION_NODE] = {
-        "inputs": {
-            "model": [unet_node_id, 0],
-            "lora_name": MOTION_LORA_NAME,
-            "strength_model": MOTION_LORA_STRENGTH,
-        },
-        "class_type": "LoraLoaderModelOnly",
-        "_meta": {"title": "Load hmmotion LoRA"},
-    }
-    workflow[_LORA_TURBO_NODE] = {
-        "inputs": {
-            "model": [_LORA_MOTION_NODE, 0],
-            "lora_name": TURBO_LORA_NAME,
-            "strength_model": TURBO_LORA_STRENGTH,
-        },
-        "class_type": "LoraLoaderModelOnly",
-        "_meta": {"title": "Load turbo LoRA"},
-    }
+    if not motion_lora and not turbo_lora:
+        return workflow
+
+    source = [unet_node_id, 0]
+    if motion_lora:
+        workflow[_LORA_MOTION_NODE] = {
+            "inputs": {
+                "model": source,
+                "lora_name": MOTION_LORA_NAME,
+                "strength_model": MOTION_LORA_STRENGTH,
+            },
+            "class_type": "LoraLoaderModelOnly",
+            "_meta": {"title": "Load hmmotion LoRA"},
+        }
+        source = [_LORA_MOTION_NODE, 0]
+    if turbo_lora:
+        workflow[_LORA_TURBO_NODE] = {
+            "inputs": {
+                "model": source,
+                "lora_name": TURBO_LORA_NAME,
+                "strength_model": TURBO_LORA_STRENGTH,
+            },
+            "class_type": "LoraLoaderModelOnly",
+            "_meta": {"title": "Load turbo LoRA"},
+        }
+        source = [_LORA_TURBO_NODE, 0]
+
     workflow[_SHIFT_NODE] = {
         "inputs": {
-            "model": [_LORA_TURBO_NODE, 0],
+            "model": source,
             "shift_video": MOTION_SHIFT_VIDEO,
             "shift_audio": MOTION_SHIFT_AUDIO,
         },
@@ -98,7 +113,8 @@ def build_minimax_h3_workflow(
     seed: int,
     first_frame_name: Optional[str] = None,
     last_frame_name: Optional[str] = None,
-    motion_loras: bool = False,
+    motion_lora: bool = False,
+    turbo_lora: bool = False,
 ) -> dict:
     try:
         width, height = RESOLUTIONS[(aspect_ratio, megapixels)]
@@ -243,8 +259,9 @@ def build_minimax_h3_workflow(
         }
         workflow["105:104"]["inputs"]["last_frame"] = ["115", 0]
 
-    if motion_loras:
-        apply_motion_loras(workflow, "105:6", ["105:16", "105:9"], "105:17", "105:9")
+    apply_motion_loras(
+        workflow, "105:6", ["105:16", "105:9"], "105:17", "105:9", motion_lora, turbo_lora
+    )
 
     return workflow
 
@@ -257,7 +274,8 @@ def build_minimax_h3_reference_workflow(
     seed: int,
     reference_image_names: Sequence[str],
     reference_audio_names: Sequence[str] = (),
-    motion_loras: bool = False,
+    motion_lora: bool = False,
+    turbo_lora: bool = False,
 ) -> dict:
     """Build the official MiniMax H3 Ref2VA image-reference graph."""
     if not 1 <= len(reference_image_names) <= 9:
@@ -416,8 +434,9 @@ def build_minimax_h3_reference_workflow(
         }
         workflow["136"]["inputs"][f"ref_audios.ref_audio_{index}"] = [node_id, 0]
 
-    if motion_loras:
-        apply_motion_loras(workflow, "127", ["126", "124"], "123", "124")
+    apply_motion_loras(
+        workflow, "127", ["126", "124"], "123", "124", motion_lora, turbo_lora
+    )
 
     return workflow
 
@@ -504,7 +523,8 @@ class ComfyUIVideoClient:
         last_frame: Optional[tuple[bytes, str, str]] = None,
         reference_images: Optional[Sequence[tuple[bytes, str, str]]] = None,
         reference_audios: Optional[Sequence[tuple[bytes, str, str]]] = None,
-        motion_loras: bool = False,
+        motion_lora: bool = False,
+        turbo_lora: bool = False,
     ) -> tuple[bytes, str, str]:
         first_frame_name = await self.upload_image(*first_frame) if first_frame else None
         last_frame_name = await self.upload_image(*last_frame) if last_frame else None
@@ -527,7 +547,8 @@ class ComfyUIVideoClient:
                 seed,
                 reference_image_names,
                 reference_audio_names,
-                motion_loras,
+                motion_lora,
+                turbo_lora,
             )
         else:
             workflow = build_minimax_h3_workflow(
@@ -538,7 +559,8 @@ class ComfyUIVideoClient:
                 seed,
                 first_frame_name,
                 last_frame_name,
-                motion_loras,
+                motion_lora,
+                turbo_lora,
             )
         response = await self._request(
             "POST",

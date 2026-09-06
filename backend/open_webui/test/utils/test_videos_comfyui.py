@@ -1,6 +1,8 @@
 import pytest
 
 from open_webui.utils.videos.comfyui import (
+    MOTION_LORA_NAME,
+    TURBO_LORA_NAME,
     ComfyUIVideoClient,
     build_minimax_h3_reference_workflow,
     build_minimax_h3_workflow,
@@ -249,36 +251,76 @@ def test_reference_workflow_without_voices_has_no_audio_nodes():
     assert not [k for k in workflow["136"]["inputs"] if k.startswith("ref_audios.")]
 
 
-def test_motion_loras_are_absent_unless_requested():
-    """The known-good path must stay byte-identical when the toggle is off."""
-    for workflow in (
-        build_minimax_h3_workflow("p", "9:16", 0.2, 10, 1),
-        build_minimax_h3_reference_workflow("p", "9:16", 0.2, 10, 1, ["a.png"]),
-    ):
-        assert not [n for n in workflow.values() if n["class_type"] == "LoraLoaderModelOnly"]
-        assert not [n for n in workflow.values() if n["class_type"] == "MiniMaxH3SigmaShift"]
+def _loras(workflow):
+    return [
+        n["inputs"]["lora_name"]
+        for n in workflow.values()
+        if n["class_type"] == "LoraLoaderModelOnly"
+    ]
+
+
+def test_both_loras_off_reproduces_the_known_good_graph():
+    """Unticking both must give exactly the pre-LoRA 20-step res_multistep graph."""
     base = build_minimax_h3_workflow("p", "9:16", 0.2, 10, 1)
+    ref = build_minimax_h3_reference_workflow("p", "9:16", 0.2, 10, 1, ["a.png"])
+    for workflow in (base, ref):
+        assert not _loras(workflow)
+        assert not [n for n in workflow.values() if n["class_type"] == "MiniMaxH3SigmaShift"]
     assert base["105:17"]["inputs"]["sampler_name"] == "res_multistep"
     assert base["105:9"]["inputs"]["steps"] == 20
+    assert ref["123"]["inputs"]["sampler_name"] == "res_multistep"
+    assert ref["124"]["inputs"]["steps"] == 20
 
 
-def test_motion_loras_chain_in_order_and_retune_the_sampler():
-    workflow = build_minimax_h3_workflow("p", "9:16", 0.2, 10, 1, motion_loras=True)
-    # UNet -> hmmotion -> turbo -> shift -> guider/scheduler.
+def test_turbo_only_chains_straight_from_the_unet():
+    workflow = build_minimax_h3_workflow("p", "9:16", 0.2, 10, 1, turbo_lora=True)
+    assert _loras(workflow) == [TURBO_LORA_NAME]
+    # No hmmotion node, so turbo must hang off the UNet itself.
+    assert workflow["902"]["inputs"]["model"] == ["105:6", 0]
+    assert workflow["903"]["inputs"]["model"] == ["902", 0]
+    assert workflow["105:16"]["inputs"]["model"] == ["903", 0]
+    assert workflow["105:17"]["inputs"]["sampler_name"] == "euler"
+    assert workflow["105:9"]["inputs"]["steps"] == 12
+
+
+def test_motion_only_chains_straight_from_the_unet():
+    workflow = build_minimax_h3_workflow("p", "9:16", 0.2, 10, 1, motion_lora=True)
+    assert _loras(workflow) == [MOTION_LORA_NAME]
+    assert workflow["901"]["inputs"]["model"] == ["105:6", 0]
+    # Turbo absent, so the shift takes the motion LoRA directly.
+    assert workflow["903"]["inputs"]["model"] == ["901", 0]
+    assert "902" not in workflow
+
+
+def test_both_loras_chain_in_order_and_retune_the_sampler():
+    workflow = build_minimax_h3_workflow(
+        "p", "9:16", 0.2, 10, 1, motion_lora=True, turbo_lora=True
+    )
+    assert _loras(workflow) == [MOTION_LORA_NAME, TURBO_LORA_NAME]
     assert workflow["901"]["inputs"]["model"] == ["105:6", 0]
     assert workflow["902"]["inputs"]["model"] == ["901", 0]
     assert workflow["903"]["inputs"]["model"] == ["902", 0]
-    assert workflow["105:16"]["inputs"]["model"] == ["903", 0]
-    assert workflow["105:9"]["inputs"]["model"] == ["903", 0]
     assert workflow["902"]["inputs"]["strength_model"] == 0.5
     assert workflow["903"]["inputs"]["shift_video"] == 6.0
     assert workflow["105:17"]["inputs"]["sampler_name"] == "euler"
     assert workflow["105:9"]["inputs"]["steps"] == 12
 
 
-def test_motion_loras_apply_to_the_reference_workflow_too():
+def test_sampler_settings_are_identical_across_lora_combinations():
+    """Holding these constant is what makes an A/B isolate the LoRA."""
+    combos = [(True, False), (False, True), (True, True)]
+    seen = set()
+    for motion, turbo in combos:
+        w = build_minimax_h3_workflow(
+            "p", "9:16", 0.2, 10, 1, motion_lora=motion, turbo_lora=turbo
+        )
+        seen.add((w["105:17"]["inputs"]["sampler_name"], w["105:9"]["inputs"]["steps"]))
+    assert seen == {("euler", 12)}
+
+
+def test_loras_apply_to_the_reference_workflow_too():
     workflow = build_minimax_h3_reference_workflow(
-        "p", "9:16", 0.2, 10, 1, ["a.png"], motion_loras=True
+        "p", "9:16", 0.2, 10, 1, ["a.png"], motion_lora=True, turbo_lora=True
     )
     assert workflow["901"]["inputs"]["model"] == ["127", 0]
     assert workflow["126"]["inputs"]["model"] == ["903", 0]

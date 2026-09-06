@@ -77,32 +77,35 @@ The live container therefore pins `COMFYUI_VIDEO_TIMEOUT=2400`. The deploy scrip
 
 **Known gap:** a timed-out job is abandoned rather than recoverable. The ComfyUI `prompt_id` is not recorded anywhere, and ComfyUI's own `/history` is in-memory and lost on restart, so once the poll gives up there is no way to reclaim the render short of importing the file by hand. Storing `prompt_id` on the job would make a timed-out generation resumable, and is the right fix if long renders stay common.
 
-### Motion LoRAs (opt-in) and how to roll back
+### LoRA toggles and how to roll back
 
-`Motion LoRA (experimental)` in the studio's generation settings splices two
-model-only LoRAs and a sigma shift between the UNet and the nodes that consume it,
-then retunes the sampler:
+Two independent checkboxes in the studio's generation settings. **Turbo is on by
+default**; motion is off. Each adds a model-only LoRA between the UNet and the
+nodes consuming it, followed by a sigma shift:
 
 ```text
-UNet -> hmmotion_minimax-h3_epoch12 (1.0) -> minimax_h3_fl2v_turbo_8step (0.5)
-     -> MiniMaxH3SigmaShift(shift_video=6, shift_audio=3) -> BasicGuider + BasicScheduler
-sampler_name: euler   steps: 12
+UNet -> [hmmotion 1.0] -> [turbo 0.5] -> MiniMaxH3SigmaShift(video 6, audio 3)
+     -> BasicGuider + BasicScheduler
 ```
 
-The LoRA files live in `C:\AI\ComfyUI-H3\models\loras\`. Both workflow builders
-support the flag; node ids differ between them (`105:6/105:16/105:9/105:17` for the
-text graph, `127/126/124/123` for the reference graph), which is why
+Either LoRA on gives `euler` at 12 steps. **Those sampler settings are identical
+for every combination on purpose**: toggling one LoRA then changes only which
+weights load, so an A/B isolates the LoRA rather than confounding it with a step
+count change. The figures come from the hmmotion recommendation; turbo is an
+8-step distillation being run at 12, which is safe but more steps than its design
+point. A test asserts the settings match across all three on-combinations.
+
+Absent LoRAs are skipped rather than bypassed, so turbo-only chains straight from
+the UNet with no hmmotion node present. LoRA files live in
+`C:\AI\ComfyUI-H3\models\loras\`. Node ids differ between the text and reference
+graphs (`105:6/105:16/105:9/105:17` versus `127/126/124/123`), which is why
 `apply_motion_loras` takes them as arguments.
 
-**Rolling back is a toggle, not a rebuild.** With the box unticked the graph is
-byte-identical to the known-good 20-step `res_multistep` path, and tests assert
-that no LoRA or shift node appears. Deeper fallbacks if ever needed:
-
-- Image: `open-webui-voice-plus:pre-lora` is the last build before this change.
-- Commit: tag `known-good-minimax-20s` (`0c3b95302`).
-- The LoRA files are additive; deleting them only breaks the toggle's ON path.
-
-Baseline for comparison: roughly 4 minutes per 10s clip at 20 steps.
+**Rolling back is unticking both boxes**, which restores a graph byte-identical to
+the original 20-step `res_multistep` path; a test asserts no LoRA or shift node
+appears. Deeper fallbacks: image `open-webui-voice-plus:pre-lora`, commit tag
+`known-good-minimax-20s` (`0c3b95302`). Measured: ~4 min per 10s clip at 20 steps,
+~3 min with both LoRAs, audio and video both intact.
 
 ### Not yet exposed: ref_image_size
 

@@ -43,8 +43,10 @@ class CreateVideoForm(BaseModel):
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "9:16"
     megapixels: Literal[0.2, 0.4] = 0.2
     duration: Literal[3, 5, 10, 15] = 3
-    # Opt-in hmmotion + turbo LoRA path (euler / 12 steps / shift 6).
-    motion_loras: bool = False
+    # LoRA path (euler / 12 steps / shift 6 whenever either is on).
+    # Turbo defaults on: it is the speed win and has tested clean.
+    motion_lora: bool = False
+    turbo_lora: bool = True
     seed: Optional[int] = Field(default=None, ge=0, le=2**63 - 1)
     chat_id: Optional[str] = None
     message_id: Optional[str] = None
@@ -425,7 +427,8 @@ async def video_generations(
         last_frame,
         reference_images,
         reference_audios,
-        form_data.motion_loras,
+        form_data.motion_lora,
+        form_data.turbo_lora,
     )
     generation_metadata = {
         **form_data.model_dump(
@@ -444,7 +447,8 @@ async def video_generations(
         "has_last_frame": last_frame is not None,
         "reference_image_count": len(reference_images),
         "reference_audio_count": len(reference_audios),
-        "motion_loras": form_data.motion_loras,
+        "motion_lora": form_data.motion_lora,
+        "turbo_lora": form_data.turbo_lora,
     }
     _, url = _upload_video(
         request,
