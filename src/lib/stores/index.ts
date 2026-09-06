@@ -54,6 +54,9 @@ export const chatId = writable('');
 // its first message creates it, so the selection is buffered here and flushed by
 // initChatHandler once the id is known.
 export const pendingChatCharacterIds = writable<string[]>([]);
+// Bumped when character state is updated automatically, so an open Controls
+// pane reloads instead of showing what it read when it opened.
+export const characterStateVersion = writable(0);
 export const chatTitle = writable('');
 
 export const channels = writable([]);

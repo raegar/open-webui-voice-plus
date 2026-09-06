@@ -108,6 +108,7 @@
 	import Image from '../common/Image.svelte';
 	import { getBanners } from '$lib/apis/configs';
 	import { attachVideoCharacter } from '$lib/apis/videos';
+	import { syncCharacterState } from '$lib/utils/characterState';
 
 	export let chatIdProp = '';
 
@@ -1341,6 +1342,10 @@
 		}
 	};
 	const chatCompletedHandler = async (_chatId, modelId, responseMessageId, messages) => {
+		// Fire-and-forget: the reply is already on screen, and continuity bookkeeping
+		// must never delay the conversation or surface an error into it.
+		void syncCharacterState(_chatId, modelId, messages);
+
 		const res = await chatCompleted(localStorage.token, {
 			model: modelId,
 			messages: messages.map((m) => ({

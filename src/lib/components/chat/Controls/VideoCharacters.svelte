@@ -11,7 +11,8 @@
 		type VideoCharacter
 	} from '$lib/apis/videos';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
-	import { pendingChatCharacterIds } from '$lib/stores';
+	import { characterStateVersion, pendingChatCharacterIds, settings } from '$lib/stores';
+	import { updateUserSettings } from '$lib/apis/users';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 
 	const i18n: any = getContext('i18n');
@@ -32,6 +33,8 @@
 	// library entry, whose description is the character's default look.
 	let states: Record<string, string> = {};
 	let savingState: string | null = null;
+	let seenStateVersion = 0;
+	$: autoTrack = ($settings as any)?.autoTrackCharacterState !== false;
 
 	// Before the first message a chat has no id, so the selection is buffered in a
 	// store and flushed by initChatHandler the moment the chat is created.
@@ -70,6 +73,21 @@
 		loadedChatId = chatId;
 		void load(chatId);
 	}
+
+	// An automatic update bumps the version; reload so the fields show it.
+	$: if ($characterStateVersion !== seenStateVersion) {
+		seenStateVersion = $characterStateVersion;
+		if (chatId) void load(chatId);
+	}
+
+	const setAutoTrack = async (enabled: boolean) => {
+		try {
+			settings.set({ ...($settings as any), autoTrackCharacterState: enabled });
+			await updateUserSettings(localStorage.token, { ui: $settings });
+		} catch (error) {
+			toast.error(`${error}`);
+		}
+	};
 
 	const saveState = async (characterId: string, value: string) => {
 		if (!chatId || value === (states[characterId] ?? '')) return;
@@ -203,5 +221,14 @@
 			>
 			<a href="/characters" class="underline">{$i18n.t('Manage')}</a>
 		</div>
+		<label class="flex items-center gap-1.5 text-[11px] text-gray-500">
+			<input
+				type="checkbox"
+				class="size-3 accent-gray-700"
+				checked={autoTrack}
+				on:change={(e) => setAutoTrack(e.currentTarget.checked)}
+			/>
+			{$i18n.t('Track what they are wearing automatically')}
+		</label>
 	{/if}
 </div>
