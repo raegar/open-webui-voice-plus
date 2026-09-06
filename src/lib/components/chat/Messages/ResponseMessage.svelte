@@ -294,7 +294,8 @@
 						imageFileIds: character.image_file_ids,
 						voiceFileId: character.voice_file_id ?? '',
 						kind: character.kind ?? 'character',
-						appliesTo: nameById.get(character.applies_to_id ?? '') ?? ''
+						appliesTo: nameById.get(character.applies_to_id ?? '') ?? '',
+						state: character.state ?? ''
 					}));
 			} catch (error) {
 				// A roster lookup failure must not block the scene; fall back to text-to-video.

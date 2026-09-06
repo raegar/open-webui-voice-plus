@@ -317,6 +317,25 @@ async def attach_video_character(
     return {"attached": True}
 
 
+class VideoCharacterStateForm(BaseModel):
+    state: str = Field(default="", max_length=2000)
+
+
+@router.post("/characters/chat/{chat_id}/state/{character_id}")
+async def set_video_character_state(
+    request: Request,
+    chat_id: str,
+    character_id: str,
+    form_data: VideoCharacterStateForm,
+    user=Depends(get_verified_user),
+):
+    """Record what an attached character is currently wearing in this chat."""
+    _check_video_access(request, user)
+    if not VideoCharacters.set_state(user.id, chat_id, character_id, form_data.state):
+        raise HTTPException(status_code=404, detail="Character is not attached to this chat")
+    return {"updated": True}
+
+
 @router.delete("/characters/chat/{chat_id}/attach/{character_id}")
 async def detach_video_character(
     request: Request,

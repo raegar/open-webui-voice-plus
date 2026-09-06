@@ -30,9 +30,21 @@ def build_character_personality_prompt(characters: Iterable[Any]) -> Optional[st
         description = _profile_value(character, "description")
         if not name or not description:
             continue
+        # Current state is tracked per chat and changes as the scene does, so it is
+        # stated after the description and marked as overriding it.
+        state = _profile_value(character, "state")
+        state_line = (
+            f"\nCurrently: {escape(state, quote=False)}"
+            "\n(This is their present state in this conversation. Where it differs from "
+            "the description above, the description is their default and this is what is "
+            "true now.)"
+            if state
+            else ""
+        )
         profiles.append(
             f'<character_profile name="{escape(name, quote=True)}">\n'
-            f"{escape(description, quote=False)}\n"
+            f"{escape(description, quote=False)}"
+            f"{state_line}\n"
             "</character_profile>"
         )
 

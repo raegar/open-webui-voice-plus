@@ -7,6 +7,7 @@
 		detachVideoCharacter,
 		getChatVideoCharacters,
 		getVideoCharacterLibrary,
+		setVideoCharacterState,
 		type VideoCharacter
 	} from '$lib/apis/videos';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
@@ -27,6 +28,10 @@
 	let loading = false;
 	let busyId: string | null = null;
 	let loadedChatId: string | null = null;
+	// Per-chat state of dress, keyed by character id. Held separately from the
+	// library entry, whose description is the character's default look.
+	let states: Record<string, string> = {};
+	let savingState: string | null = null;
 
 	// Before the first message a chat has no id, so the selection is buffered in a
 	// store and flushed by initChatHandler the moment the chat is created.
@@ -51,6 +56,7 @@
 			]);
 			library = lib;
 			attachedIds = chatCharacters.map((c) => c.id);
+			states = Object.fromEntries(chatCharacters.map((c) => [c.id, c.state ?? '']));
 		} catch (error) {
 			toast.error(`${error}`);
 		} finally {
@@ -64,6 +70,19 @@
 		loadedChatId = chatId;
 		void load(chatId);
 	}
+
+	const saveState = async (characterId: string, value: string) => {
+		if (!chatId || value === (states[characterId] ?? '')) return;
+		savingState = characterId;
+		try {
+			await setVideoCharacterState(localStorage.token, chatId, characterId, value);
+			states = { ...states, [characterId]: value };
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			savingState = null;
+		}
+	};
 
 	const toggle = async (character: VideoCharacter) => {
 		const isAttached = selectedIds.includes(character.id);
@@ -164,6 +183,15 @@
 					</span>
 				{/if}
 			</button>
+			{#if isAttached && (character.kind ?? 'character') === 'character'}
+				<input
+					class="-mt-1 w-full rounded-b-lg border border-t-0 border-gray-100 bg-transparent px-2 py-1 text-[11px] outline-none focus:border-gray-400 dark:border-gray-850"
+					placeholder={$i18n.t('Currently wearing… (kept for this chat)')}
+					value={states[character.id] ?? ''}
+					disabled={savingState === character.id}
+					on:blur={(e) => saveState(character.id, e.currentTarget.value)}
+				/>
+			{/if}
 		{/each}
 
 		<div class="flex items-center justify-between text-[11px] text-gray-500">

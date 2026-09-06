@@ -159,6 +159,8 @@ export type VideoCharacter = {
 	voice_file_id: string;
 	kind: ReferenceKind;
 	applies_to_id: string;
+	/** Per-chat state of dress; only present from getChatVideoCharacters. */
+	state?: string;
 };
 
 const videoCharacterRequest = async (token: string, path: string, init: RequestInit = {}) => {
@@ -236,6 +238,18 @@ export const attachVideoCharacter = async (token: string, chatId: string, charac
 		token,
 		`/characters/chat/${encodeURIComponent(chatId)}/attach/${characterId}`,
 		{ method: 'POST' }
+	);
+
+export const setVideoCharacterState = async (
+	token: string,
+	chatId: string,
+	characterId: string,
+	state: string
+) =>
+	await videoCharacterRequest(
+		token,
+		`/characters/chat/${encodeURIComponent(chatId)}/state/${characterId}`,
+		{ method: 'POST', body: JSON.stringify({ state }) }
 	);
 
 export const detachVideoCharacter = async (token: string, chatId: string, characterId: string) =>

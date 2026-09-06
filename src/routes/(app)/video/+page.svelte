@@ -442,6 +442,7 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 			voiceFileId?: string;
 			kind?: string;
 			appliesTo?: string;
+			state?: string;
 		}[]
 	): Promise<{ images: FrameAsset[]; voices: string[]; summary: string | null }> => {
 		const images: FrameAsset[] = [];
@@ -499,7 +500,13 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 						console.error(error);
 					}
 				}
-				cast.push(`${name} — ${pictures}.${audioLabel} ${description}`);
+				// Present state overrides the library description, which is only their
+				// default look; a scene should show what they are wearing right now.
+				const state = entry?.state?.trim();
+				const stateLine = state
+					? ` Right now they are: ${state} — this overrides any clothing in the description.`
+					: '';
+				cast.push(`${name} — ${pictures}.${audioLabel} ${description}${stateLine}`);
 			}
 		}
 

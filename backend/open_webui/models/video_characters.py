@@ -69,6 +69,9 @@ class VideoChatCharacter(Base):
     chat_id = Column(String, index=True, nullable=False)
     character_id = Column(String, index=True, nullable=False)
     position = Column(Integer, nullable=False, default=0)
+    # What this character is currently wearing / their state of dress in this chat.
+    # Mutable per chat, unlike the library description, which is their default look.
+    state = Column(Text, nullable=False, default="")
     created_at = Column(BigInteger, nullable=False)
 
 
@@ -81,6 +84,8 @@ class VideoCharacterModel(BaseModel):
     voice_file_id: str
     kind: str
     applies_to_id: str
+    # Only populated by get_for_chat; a library listing has no per-chat state.
+    state: str = ""
     created_at: int
     updated_at: int
 
@@ -220,11 +225,15 @@ class VideoCharactersTable:
                 )
                 .all()
             }
-            return [
-                _to_model(rows[link.character_id])
-                for link in links
-                if link.character_id in rows
-            ]
+            models = []
+            for link in links:
+                row = rows.get(link.character_id)
+                if row is None:
+                    continue
+                model = _to_model(row)
+                model.state = link.state or ""
+                models.append(model)
+            return models
 
     def attach(self, user_id: str, chat_id: str, character_id: str) -> bool:
         with get_db() as db:
@@ -260,6 +269,22 @@ class VideoCharactersTable:
             db.commit()
             return True
 
+    def set_state(
+        self, user_id: str, chat_id: str, character_id: str, state: str
+    ) -> bool:
+        """Record what a character is currently wearing in this chat."""
+        with get_db() as db:
+            link = (
+                db.query(VideoChatCharacter)
+                .filter_by(user_id=user_id, chat_id=chat_id, character_id=character_id)
+                .first()
+            )
+            if not link:
+                return False
+            link.state = state.strip()
+            db.commit()
+            return True
+
     def detach(self, user_id: str, chat_id: str, character_id: str) -> bool:
         with get_db() as db:
             deleted = (
@@ -291,14 +316,26 @@ def _add_missing_columns() -> None:
             "applies_to_id": "VARCHAR NOT NULL DEFAULT ''",
         }
         missing = {n: d for n, d in wanted.items() if n not in existing}
-        if not missing:
+        link_existing = {
+            c["name"] for c in inspect(engine).get_columns("video_chat_character")
+        }
+        link_missing = {} if "state" in link_existing else {"state": "TEXT NOT NULL DEFAULT ''"}
+        if not missing and not link_missing:
             return
         with engine.begin() as connection:
             for name, definition in missing.items():
                 connection.execute(
                     text(f"ALTER TABLE video_character ADD COLUMN {name} {definition}")
                 )
-        log.info("Added video_character columns: %s", ", ".join(missing))
+            for name, definition in link_missing.items():
+                connection.execute(
+                    text(f"ALTER TABLE video_chat_character ADD COLUMN {name} {definition}")
+                )
+        log.info(
+            "Added columns: video_character(%s) video_chat_character(%s)",
+            ", ".join(missing) or "-",
+            ", ".join(link_missing) or "-",
+        )
     except Exception:
         log.exception("Could not add missing video_character columns")
 
