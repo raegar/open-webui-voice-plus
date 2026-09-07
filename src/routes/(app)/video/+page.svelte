@@ -55,7 +55,7 @@
 
 Use contiguous [Xs-Ys] segments covering the full requested duration with no gaps. The first starts at 0s and the last ends at the exact duration. Use 2-3 segments for about 5 seconds, 4-5 for about 10 seconds, and 6-7 for about 15 seconds.
 
-Each segment is 1-3 present-tense sentences describing observable motion rather than a static frame. Include setting, subject appearance and position, action and state change, lighting and atmosphere, plus an intentional camera angle or movement. Make events flow naturally and remain physically achievable. Imply synchronized ambience, speech, and physical sounds through the scene description; do not add separate audio sections. Preserve dialogue and visible text verbatim. Never say "show me", "create", or "generate".
+Each segment is 1-3 present-tense sentences describing observable motion rather than a static frame. Include setting, subject appearance and position, action and state change, lighting and atmosphere, plus an intentional camera angle or movement. Make events flow naturally and remain physically achievable. Imply synchronized ambience, speech, and physical sounds through the scene description; do not add separate audio sections. Preserve visible text verbatim, and dialogue verbatim up to the spoken-word budget in the constraints - beyond it, keep the strongest line and drop the rest rather than compressing the whole speech, because speech that overruns the clip length comes out garbled. Never say "show me", "create", or "generate".
 
 Frame pixels are unavailable to you. Never invent their contents. A first-frame workflow must begin exactly at the supplied frame and develop forward. A first-and-last workflow must describe a plausible continuous path that starts exactly at the first frame and lands exactly at the last frame. Treat duration and aspect ratio as hard constraints.`;
 
@@ -75,7 +75,9 @@ In subject_definitions, define reusable <Subject N> identities, scenes, or style
 
 In detailed_description, establish the overall style and describe every shot concretely: composition, appearance, position, action, environment, lighting, camera, state changes, and where referenced content appears. [Shot 1] has no timestamp. Later cuts use [Shot N] At 00:SS.mmm with strictly increasing times inside the duration. Camera movement includes type, amplitude, and speed. Keep stable speaker IDs such as (S1); put exact dialogue inside <d>[Language] words.</d>. Put visible text in double quotes verbatim.
 
-overall_soundscape contains ambience and physical sounds without dialogue or music. non_diegetic_music specifies instrumentation, tempo, rhythm, and dynamics, or N/A. Treat duration and aspect ratio as hard constraints. Prefer a focused, achievable sequence over unnecessary shot changes.`;
+overall_soundscape contains ambience and physical sounds without dialogue or music. non_diegetic_music specifies instrumentation, tempo, rhythm, and dynamics, or N/A. Treat duration and aspect ratio as hard constraints. Prefer a focused, achievable sequence over unnecessary shot changes.
+
+Speech obeys real time and cannot be sped up. Keep the total spoken words across every <d> tag inside the budget given in the constraints, and keep dialogue to the stated maximum number of shots. When the scenario contains more speech than fits, stage only the strongest line or two and let the rest go unsaid; a brief that overruns the budget produces garbled, unintelligible audio, which is a worse failure than leaving a line out. Write dialogue as short spoken sentences, not paragraphs. End the summary paragraph by stating that clear intelligible speech takes priority over additional action or shot changes. Keep the soundscape quiet and uncluttered while anyone is speaking, and never ask for muttering, background chatter, or invented vocalisations.`;
 
 	let loaded = false;
 	let selectedModelId = '';
@@ -141,6 +143,28 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 	// brief gives it words: the node appends an audio ref item unconditionally. With
 	// no <d> lines it invents phonemes, which comes out as garbled speech.
 	const promptHasDialogue = (text: string) => /<d>[\s\S]*?<\/d>/i.test(text ?? '');
+
+	// Speech is the one thing in a clip that cannot be compressed: a line takes as long
+	// to say as it takes to say. Overrunning the runtime is the main cause of garbled
+	// output - the model tries to fit the words in and the phonemes collapse into mush.
+	// Calibrated against two real drafts of the same 10s scene: a 137-word one garbled
+	// (it needs about 46 seconds to speak), and a 30-word rewrite of it came out clean.
+	// 3 words per second is brisk but articulate, and puts that working rewrite exactly
+	// at the limit, so the budget is permissive enough not to cry wolf on good drafts.
+	const SPEECH_WORDS_PER_SECOND = 3;
+	const speechBudget = (seconds: number) =>
+		Math.max(8, Math.round(seconds * SPEECH_WORDS_PER_SECOND));
+	// Every cut spends runtime establishing a new frame, and that time competes with the
+	// spoken line rather than adding to it.
+	const dialogueShotBudget = (seconds: number) => (seconds <= 5 ? 1 : seconds <= 10 ? 2 : 3);
+
+	/** Words actually spoken: the contents of every <d> tag, minus the [Language] marker. */
+	const countSpokenWords = (text: string): number =>
+		[...(text ?? '').matchAll(/<d>([\s\S]*?)<\/d>/gi)]
+			.map(([, inner]) => inner.replace(/\[[^\]]*\]/g, ' '))
+			.join(' ')
+			.split(/\s+/)
+			.filter(Boolean).length;
 
 	// Dropping the audio is not enough on its own. H3 always generates an audio track,
 	// and the drafted brief still asserts "Their speaking voice is <Audio N>" because
@@ -647,6 +671,8 @@ Hard constraints:
 - Duration: ${duration} seconds
 - Aspect ratio: ${aspectRatio}
 - Workflow: ${workflowLabel()}
+- Spoken words: ${speechBudget(duration)} at most, counted across every <d> tag combined
+- Shots containing dialogue: ${dialogueShotBudget(duration)} at most
 
 Frame metadata only (the image pixels are intentionally unavailable to you):
 ${frameMetadata()}
@@ -657,8 +683,8 @@ Reference sheet for this scene, grouped by role. Each entry lists the pictures t
 ---
 ${sceneCharacters}
 ---
-Where a character lists an <Audio N> tag, that recording is their speaking voice: cite it in subject_definitions alongside their pictures and keep their dialogue in that voice. Never give one character another's audio.
-A character with an <Audio N> tag MUST either speak at least one line, written verbatim inside <d>[Language] words.</d>, or be described explicitly as silent in this shot. Never leave a voiced character with no stated speech: the model will invent unintelligible words to fill the gap. Carry over any dialogue from the creative direction word for word rather than summarising it.
+Where a character lists an <Audio N> tag, that recording defines their speaking voice: cite it in subject_definitions alongside their pictures and keep their dialogue in that voice. State that the recording supplies timbre, accent and delivery only, and that none of its original words carry into the video. Never give one character another's audio.
+A character with an <Audio N> tag MUST either speak at least one line, written verbatim inside <d>[Language] words.</d>, or be described explicitly as silent in this shot. Never leave a voiced character with no stated speech: the model will invent unintelligible words to fill the gap. Carry dialogue over from the creative direction word for word, but only as much of it as the spoken-word budget allows. Choose the one or two lines that matter most and drop the rest entirely; never paraphrase or compress a long speech to make it fit. A clip that says one line clearly is correct, and one that crams a whole exchange in produces unintelligible speech.
 Every named person below must be rendered from their own reference pictures. Where a character has no written description, describe them only as the references and the scene support.
 `
 		: ''
@@ -699,7 +725,17 @@ Write the final MiniMax H3 production brief now.`
 				throw new Error('The selected model returned an empty prompt.');
 			}
 			productionPrompt = cleanModelPrompt(content);
-			toast.success('Draft ready. Review and approve it before generating.');
+			// The budget is guidance to the drafting model, not something it is bound by, so
+			// check the result and say so before four minutes of render proves it the hard way.
+			const spokenWords = countSpokenWords(productionPrompt);
+			const budget = speechBudget(duration);
+			if (spokenWords > budget) {
+				toast.warning(
+					`Draft ready, but it has ${spokenWords} spoken words for a ${duration}s clip (budget ${budget}). Speech that overruns the clip comes out garbled - trim the dialogue or raise the duration before generating.`
+				);
+			} else {
+				toast.success('Draft ready. Review and approve it before generating.');
+			}
 		} catch (error) {
 			toast.error(`Prompt drafting failed: ${error}`);
 		} finally {
@@ -713,7 +749,15 @@ Write the final MiniMax H3 production brief now.`
 			return;
 		}
 		promptApproved = true;
-		toast.success('Prompt approved for generation.');
+		const spokenWords = countSpokenWords(productionPrompt);
+		const budget = speechBudget(duration);
+		if (spokenWords > budget) {
+			toast.warning(
+				`Approved, but ${spokenWords} spoken words is over the ${budget} that fit in ${duration}s. Expect garbled speech.`
+			);
+		} else {
+			toast.success('Prompt approved for generation.');
+		}
 	};
 
 	const startElapsedTimer = () => {
