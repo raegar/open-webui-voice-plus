@@ -2,7 +2,7 @@ import { get } from 'svelte/store';
 
 import { generateOpenAIChatCompletion } from '$lib/apis/openai';
 import { getChatVideoCharacters, setVideoCharacterState } from '$lib/apis/videos';
-import { characterStateVersion, settings } from '$lib/stores';
+import { characterStateVersion, models, settings } from '$lib/stores';
 
 // The automatic pass runs every turn, so it stays cheap and only looks at the latest
 // exchange. A manual refresh is deliberate and infrequent, so it can afford a much
@@ -26,6 +26,26 @@ Rules:
 - Describe only clothing and state of dress. No personality, no actions, no plot.
 - Write the complete current state, not the delta: "barefoot in a red silk gown" rather than "took off shoes".
 - Keep each value under 200 characters.`;
+
+/**
+ * A workspace model carries its own system prompt, and the backend prepends it to
+ * every request made against that model. For a roleplay model that means this
+ * tracker would run *in character* - a persona narrating the scene in first person
+ * biases which characters it bothers to report on, so the character the persona
+ * plays keeps getting updated and the other one silently does not. Resolving to the
+ * underlying base model lets the tracker's own instructions stand on their own.
+ */
+const trackerModel = (modelId: string): string => {
+	const model = (get(models) as any[])?.find((m) => m?.id === modelId);
+	return model?.info?.base_model_id || modelId;
+};
+
+/**
+ * Names are matched ignoring case and surrounding whitespace. Matching stays
+ * whole-name: profiles like "Alex", "Alex (A.I.)" and "Alex (2007)" coexist in
+ * the library, so anything looser would put one character's clothes on another.
+ */
+const nameKey = (name: string): string => name.trim().toLowerCase();
 
 type TrackedCharacter = { id: string; name: string; description: string; state: string };
 
@@ -96,7 +116,7 @@ export const syncCharacterState = async (
 			.join('\n');
 
 		const response = await generateOpenAIChatCompletion(localStorage.token, {
-			model: modelId,
+			model: trackerModel(modelId),
 			stream: false,
 			messages: [
 				{ role: 'system', content: SYSTEM },
@@ -111,9 +131,17 @@ export const syncCharacterState = async (
 		if (typeof content !== 'string' || !content.trim()) return { updated: [] };
 
 		const updates = parseStates(content);
+		// A reply that differs only in case or padding still has to land; a lookup
+		// miss here is invisible and looks exactly like a character never updating.
+		const byName = new Map<string, unknown>();
+		for (const [key, value] of Object.entries(updates)) {
+			byName.set(nameKey(key), value);
+		}
 		const updated: string[] = [];
 		for (const character of tracked) {
-			const next = updates[character.name];
+			const next = Object.prototype.hasOwnProperty.call(updates, character.name)
+				? updates[character.name]
+				: byName.get(nameKey(character.name));
 			// Only a non-empty string that actually differs counts as a change, so a
 			// malformed reply or an unchanged character never clears what is recorded.
 			if (typeof next !== 'string') continue;
