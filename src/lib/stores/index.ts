@@ -222,6 +222,12 @@ type Settings = {
 	ctrlEnterToSend?: boolean;
 	renderMarkdownInPreviews?: boolean;
 
+	// Fork additions: Video Studio and character library preferences.
+	videoPromptModel?: string;
+	videoPromptUseChatModel?: boolean;
+	characterDescriptionModel?: string;
+	autoTrackCharacterState?: boolean;
+
 	system?: string;
 	seed?: number;
 	temperature?: string;

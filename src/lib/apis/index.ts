@@ -1677,6 +1677,8 @@ export interface ModelMeta {
 	description?: string;
 	capabilities?: object;
 	profile_image_url?: string;
+	// Set on a workspace model to keep it out of the pickers.
+	hidden?: boolean;
 }
 
 export interface ModelParams {}
