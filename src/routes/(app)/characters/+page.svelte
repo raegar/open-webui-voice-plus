@@ -4,6 +4,8 @@
 	import { toast } from 'svelte-sonner';
 
 	import { uploadFile } from '$lib/apis/files';
+	import { generateOpenAIChatCompletion } from '$lib/apis/openai';
+	import { updateUserSettings } from '$lib/apis/users';
 	import {
 		createVideoCharacter,
 		deleteVideoCharacter,
@@ -11,12 +13,13 @@
 		updateVideoCharacter,
 		type VideoCharacter
 	} from '$lib/apis/videos';
+	import Selector from '$lib/components/chat/ModelSelector/Selector.svelte';
 	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Sidebar from '$lib/components/icons/Sidebar.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
-	import { config, mobile, showSidebar, user, WEBUI_NAME } from '$lib/stores';
+	import { config, mobile, models, settings, showSidebar, user, WEBUI_NAME } from '$lib/stores';
 
 	const MAX_IMAGES_PER_CHARACTER = 3;
 	// Mirrors the max_length on VideoCharacterForm; exceeding it is a 422 from the API.
@@ -55,6 +58,16 @@
 	let descriptionDrafts: Record<string, string> = {};
 	let pendingDeletion: VideoCharacter | null = null;
 	let showDeleteConfirm = false;
+	let descriptionModelId = '';
+	let lastPersistedModel = '';
+	let savingModelPreference = false;
+	// The short brief each card expands from, and which card is mid-generation.
+	let seedPrompts: Record<string, string> = {};
+	let generatingFor: string | null = null;
+	// What a description was before the last generation, so it can be put back.
+	let previousDescriptions: Record<string, string> = {};
+
+	$: availableModels = ($models ?? []).filter((model) => !(model?.info?.meta?.hidden ?? false));
 
 	$: canUseVideo =
 		$config?.features?.enable_video_generation &&
@@ -179,6 +192,142 @@
 			toast.error(`${error}`);
 		}
 	};
+
+	// A description feeds two very different consumers: the chat, where it becomes the
+	// assistant's characterization, and the video reference sheet, where it must tell a
+	// model that has never seen the person what they look like. Both halves have to be
+	// present, which is why the shape is prescribed rather than left to the model.
+	const DESCRIPTION_SYSTEM: Record<string, string> = {
+		character: `You write reference profiles for a roleplay and video generation system. Expand the user's short brief into one description.
+
+Write it in two parts, in this order, each under its own heading exactly as given:
+
+Background and personality
+Where they come from, what they do, what shaped them, how they carry themselves with other people, how they speak, and their habits and mannerisms.
+
+Appearance
+Their usual look, concretely and visually: apparent age, build and height, skin tone, hair colour, length and style, eye colour, face shape, distinguishing features, and the clothes they normally wear.
+
+Rules:
+- Anything the brief states is fixed and must survive unchanged. Fill every gap yourself with a specific, definite choice; never write "unspecified", "varies", "perhaps", or offer alternatives.
+- The appearance part is read by a video model that has never seen this person and cannot see any picture. Describe what is visible rather than naming a style, a subculture, or a resemblance to someone else.
+- Third person, present tense, plain prose. No markdown, no bullet points, no headings other than the two above.
+- Aim for 200 to 350 words, and never exceed 3500 characters.`,
+		location: `You write place references for a video generation system. Expand the user's short brief into one description of a location.
+
+Write it in two parts, in this order, each under its own heading exactly as given:
+
+Character and use
+What the place is, who uses it and what for, and the atmosphere it has.
+
+Appearance
+Its visual detail: size and layout, surfaces and materials, colours, light sources and how the light falls, furniture, and the objects that fill it.
+
+Rules:
+- Anything the brief states is fixed. Fill every gap yourself with a specific, definite choice; never hedge or offer alternatives.
+- This is an environment, never a subject. Do not describe people in it, and never give it actions, speech, or intent.
+- It is read by a video model that has never seen the place. Describe what is visible rather than naming a style or a period alone.
+- Third person, present tense, plain prose. No markdown, no bullet points, no headings other than the two above.
+- Aim for 150 to 300 words, and never exceed 3500 characters.`,
+		outfit: `You write wardrobe references for a video generation system. Expand the user's short brief into one description of a set of clothing.
+
+Write plain prose covering every garment in turn: each piece, its cut and fit, fabric and texture, colour and pattern, condition and wear, and how it sits on the body. Then footwear, then accessories and jewellery.
+
+Rules:
+- Anything the brief states is fixed. Fill every gap yourself with a specific, definite choice; never hedge or offer alternatives.
+- Describe the clothing only. Never describe the face, body, hair, age, or identity of anyone wearing it: these garments are placed on a character defined elsewhere.
+- It is read by a video model that has never seen the clothes. Describe what is visible rather than naming a brand, a designer, or a style alone.
+- Third person, present tense, plain prose. No markdown, no bullet points, no headings.
+- Aim for 120 to 250 words, and never exceed 3500 characters.`
+	};
+
+	const seedPlaceholder = (kind: string) =>
+		kind === 'location'
+			? 'A line is enough: cramped 1980s arcade above a chip shop'
+			: kind === 'outfit'
+				? 'A line is enough: battered leather jacket over a faded band tee'
+				: 'A line is enough: sardonic goth barista, late 20s, ex-art student';
+
+	// Models reach for fences and bold headings however plainly they are told not to.
+	const cleanDescription = (text: string) =>
+		text
+			.replace(/^\s*```[a-z]*\s*/i, '')
+			.replace(/\s*```\s*$/i, '')
+			.replace(/\*\*/g, '')
+			.replace(/^#+\s*/gm, '')
+			.trim();
+
+	const describeCharacter = async (character: VideoCharacter) => {
+		const seed = (seedPrompts[character.id] ?? '').trim();
+		if (!seed) {
+			toast.error('Write a short brief first.');
+			return;
+		}
+		if (!descriptionModelId) {
+			toast.error('Choose a description model first.');
+			return;
+		}
+		generatingFor = character.id;
+		try {
+			const kind = character.kind ?? 'character';
+			const response = await generateOpenAIChatCompletion(localStorage.token, {
+				model: descriptionModelId,
+				stream: false,
+				messages: [
+					{ role: 'system', content: DESCRIPTION_SYSTEM[kind] ?? DESCRIPTION_SYSTEM.character },
+					{
+						role: 'user',
+						content: `Name: ${character.name}\n\nBrief:\n${seed}\n\nWrite the description now.`
+					}
+				]
+			});
+			const content = response?.choices?.[0]?.message?.content;
+			if (typeof content !== 'string' || !content.trim()) {
+				throw new Error('The model returned an empty description.');
+			}
+			const text = cleanDescription(content).slice(0, MAX_DESCRIPTION);
+			// Capture what was there before saving over it, so Undo has something to put
+			// back whether or not that text had ever been saved.
+			previousDescriptions = {
+				...previousDescriptions,
+				[character.id]: descriptionDrafts[character.id] ?? character.description
+			};
+			descriptionDrafts = { ...descriptionDrafts, [character.id]: text };
+			await saveField(character, { description: text });
+			toast.success(`Description written for ${character.name}.`);
+		} catch (error) {
+			toast.error(`The description could not be generated: ${error}`);
+		} finally {
+			generatingFor = null;
+		}
+	};
+
+	const undoDescription = async (character: VideoCharacter) => {
+		const previous = previousDescriptions[character.id];
+		if (previous === undefined) return;
+		descriptionDrafts = { ...descriptionDrafts, [character.id]: previous };
+		await saveField(character, { description: previous });
+		const { [character.id]: _dropped, ...rest } = previousDescriptions;
+		previousDescriptions = rest;
+	};
+
+	const persistDescriptionModel = async () => {
+		savingModelPreference = true;
+		try {
+			settings.set({ ...$settings, characterDescriptionModel: descriptionModelId });
+			await updateUserSettings(localStorage.token, { ui: $settings });
+		} catch (error) {
+			toast.error(`The description model preference could not be saved: ${error}`);
+		} finally {
+			savingModelPreference = false;
+		}
+	};
+
+	// Selector does not dispatch a change event, so watch the value instead.
+	$: if (loaded && descriptionModelId && descriptionModelId !== lastPersistedModel) {
+		lastPersistedModel = descriptionModelId;
+		void persistDescriptionModel();
+	}
 
 	const confirmDelete = (character: VideoCharacter) => {
 		pendingDeletion = character;
@@ -311,6 +460,18 @@
 			await goto('/');
 			return;
 		}
+		// A saved default wins, but only while that model still exists. Falling back to
+		// the video prompt model means one choice to configure rather than two.
+		const known = (id?: string) =>
+			id && availableModels.some((model) => model.id === id) ? id : undefined;
+		descriptionModelId =
+			known($settings?.characterDescriptionModel) ??
+			known($settings?.videoPromptModel) ??
+			$settings?.models?.[0] ??
+			$config?.default_models?.split(',')?.[0] ??
+			availableModels[0]?.id ??
+			'';
+		lastPersistedModel = descriptionModelId;
 		loaded = true;
 		await load();
 	});
@@ -378,6 +539,25 @@
 						>
 							{creating ? 'Adding...' : 'Add character'}
 						</button>
+					</div>
+					<div class="mt-3 flex flex-wrap items-center justify-end gap-2">
+						<span class="text-xs text-gray-500">Description model</span>
+						<div class="w-64 max-w-full">
+							<Selector
+								placeholder="Select a model"
+								items={availableModels.map((model) => ({
+									value: model.id,
+									label: model.name,
+									model
+								}))}
+								bind:value={descriptionModelId}
+								className="w-full"
+								triggerClassName="text-sm"
+							/>
+						</div>
+						{#if savingModelPreference}
+							<span class="text-xs text-gray-400">saving...</span>
+						{/if}
 					</div>
 				</section>
 
@@ -461,6 +641,38 @@
 											: 'text-gray-500'}"
 								>
 									{draft.length}/{MAX_DESCRIPTION}{over > 0 ? ` — ${over} over` : ''}
+								</div>
+
+								<div class="mt-2 rounded-xl border border-gray-200 p-2.5 dark:border-gray-700">
+									<div class="flex items-center gap-2">
+										<input
+											class="min-w-0 flex-1 rounded-lg border border-gray-200 bg-transparent px-2 py-1.5 text-xs outline-none focus:border-gray-500 dark:border-gray-700"
+											placeholder={seedPlaceholder(character.kind ?? 'character')}
+											value={seedPrompts[character.id] ?? ''}
+											on:input={(e) => (seedPrompts[character.id] = e.currentTarget.value)}
+											on:keydown={(e) => e.key === 'Enter' && describeCharacter(character)}
+										/>
+										<button
+											class="shrink-0 rounded-lg bg-black px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40 dark:bg-white dark:text-black"
+											disabled={generatingFor === character.id ||
+												!(seedPrompts[character.id] ?? '').trim() ||
+												!descriptionModelId}
+											on:click={() => describeCharacter(character)}
+										>
+											{generatingFor === character.id ? 'Writing...' : 'Generate'}
+										</button>
+									</div>
+									<div class="mt-1 flex items-center gap-2 text-[11px] text-gray-500">
+										<span class="min-w-0 flex-1"
+											>Expands a short brief into a full description, replacing what is above.</span
+										>
+										{#if previousDescriptions[character.id] !== undefined}
+											<button
+												class="shrink-0 hover:underline"
+												on:click={() => undoDescription(character)}>Undo</button
+											>
+										{/if}
+									</div>
 								</div>
 
 								<div class="mt-2 flex flex-wrap gap-2">
