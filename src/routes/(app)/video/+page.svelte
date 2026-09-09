@@ -6,9 +6,12 @@
 	import { generateOpenAIChatCompletion } from '$lib/apis/openai';
 	import { deleteFileById } from '$lib/apis/files';
 	import {
+		cancelVideoGenerationJob,
 		getVideoGenerationJob,
 		getVideoHistory,
+		listVideoGenerationJobs,
 		startVideoGenerationJob,
+		type VideoGenerationJob,
 		type VideoGenerationOptions
 	} from '$lib/apis/videos';
 	import Selector from '$lib/components/chat/ModelSelector/Selector.svelte';
@@ -112,7 +115,13 @@ Every person visible in a shot needs described behaviour for the whole of that s
 	let referenceImages: FrameAsset[] = [];
 	let drafting = false;
 	let generating = false;
-	let generationPolling = false;
+	let submitting = false;
+	// Job ids this browser is following, and the server's view of the ones still
+	// waiting or rendering. The server is authoritative on order and position, so a
+	// phone and a desktop looking at the same queue agree.
+	let trackedJobIds: string[] = [];
+	let queueJobs: VideoGenerationJob[] = [];
+	let queuePolling = false;
 	let destroyed = false;
 	let elapsedSeconds = 0;
 	let currentVideo: GeneratedVideo | null = null;
@@ -821,6 +830,29 @@ Write the final MiniMax H3 production brief now.`
 	};
 
 	const activeJobStorageKey = () => `owui-video-generation-job:${$user?.id ?? 'default'}`;
+
+	const readTrackedJobs = (): string[] => {
+		const raw = localStorage.getItem(activeJobStorageKey());
+		if (!raw) return [];
+		try {
+			const parsed = JSON.parse(raw);
+			return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
+		} catch {
+			// Before the queue this key held one job id as a bare string, which is not
+			// JSON. Carry that job over rather than dropping a render already running.
+			return [raw];
+		}
+	};
+
+	const writeTrackedJobs = (ids: string[]) => {
+		if (ids.length) localStorage.setItem(activeJobStorageKey(), JSON.stringify(ids));
+		else localStorage.removeItem(activeJobStorageKey());
+	};
+
+	const untrackJob = (jobId: string) => {
+		trackedJobIds = trackedJobIds.filter((id) => id !== jobId);
+		writeTrackedJobs(trackedJobIds);
+	};
 	const wait = (milliseconds: number) =>
 		new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
@@ -846,53 +878,88 @@ Write the final MiniMax H3 production brief now.`
 		return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 	};
 
-	const pollVideoGenerationJob = async (jobId: string, resumed = false) => {
-		if (generationPolling) return;
-		generationPolling = true;
-		generating = true;
-		if (!elapsedTimer) startElapsedTimer();
-		if (resumed) toast.info('Reconnected to the video generation job.');
+	// One loop follows every job this browser is tracking. Each tick asks the server
+	// for each job rather than trusting a local model of the queue, because the queue
+	// is shared: another tab, or a phone, can add to it or cancel from it.
+	const pollQueue = async (resumed = false) => {
+		if (queuePolling) return;
+		queuePolling = true;
+		if (resumed && trackedJobIds.length) toast.info('Reconnected to the video generation queue.');
 		try {
-			while (!destroyed) {
-				try {
-					const job = await getVideoGenerationJob(localStorage.token, jobId);
-					elapsedSeconds = Math.max(
-						elapsedSeconds,
-						Math.max(0, Math.floor(Date.now() / 1000 - job.created_at))
-					);
+			while (!destroyed && trackedJobIds.length > 0) {
+				const active: VideoGenerationJob[] = [];
+				for (const jobId of [...trackedJobIds]) {
+					let job: VideoGenerationJob;
+					try {
+						job = await getVideoGenerationJob(localStorage.token, jobId);
+					} catch (error) {
+						const message = String(error);
+						if (message.includes('Video generation job not found')) {
+							// Pruned, or lost when the server restarted. Nothing to wait for.
+							untrackJob(jobId);
+							toast.error('A generation is no longer on the server and has been dropped.');
+						}
+						// Browsers suspend requests while a phone is locked, so any other
+						// failure keeps the job and retries on the next tick.
+						continue;
+					}
 					if (job.status === 'completed') {
+						untrackJob(jobId);
 						const result = job.result?.[0] as GeneratedVideo | undefined;
-						if (!result?.url) throw new Error('The completed job returned no video.');
-						currentVideo = result;
-						seed = String(result.seed);
-						localStorage.removeItem(activeJobStorageKey());
-						toast.success('MiniMax H3 video completed.');
-						return;
+						if (result?.url) {
+							// Only now does the previous clip move to history: with a queue,
+							// submitting is no longer the moment a new video replaces it.
+							archiveCurrentVideo();
+							currentVideo = result;
+							seed = String(result.seed);
+							toast.success('MiniMax H3 video completed.');
+						} else {
+							toast.error('A completed generation returned no video.');
+						}
+						continue;
 					}
 					if (job.status === 'failed') {
-						localStorage.removeItem(activeJobStorageKey());
-						throw new Error(job.error || 'Video generation failed.');
+						untrackJob(jobId);
+						toast.error(`Video generation failed: ${job.error ?? 'unknown error'}`);
+						continue;
 					}
-				} catch (error) {
-					const message = String(error);
-					if (
-						message.includes('Video generation job not found') ||
-						!message.includes('Server connection failed')
-					) {
-						localStorage.removeItem(activeJobStorageKey());
-						throw error;
+					if (job.status === 'cancelled') {
+						untrackJob(jobId);
+						continue;
 					}
-					// Browsers suspend network requests while a phone is locked. Keep the job
-					// active and retry after connectivity resumes instead of reporting failure.
+					active.push(job);
 				}
+				queueJobs = active;
+				const running = active.find((job) => job.status === 'running');
+				generating = active.length > 0;
+				if (running) {
+					// Time the render, not the wait: started_at is when it left the queue.
+					const since = running.started_at ?? running.created_at;
+					elapsedSeconds = Math.max(0, Math.floor(Date.now() / 1000 - since));
+					if (!elapsedTimer) startElapsedTimer();
+				} else {
+					stopElapsedTimer();
+					elapsedSeconds = 0;
+				}
+				if (!trackedJobIds.length) break;
 				await wait(3000);
 			}
-		} catch (error) {
-			if (!destroyed) toast.error(`Video generation failed: ${error}`);
 		} finally {
-			generationPolling = false;
+			queuePolling = false;
+			queueJobs = [];
 			generating = false;
 			stopElapsedTimer();
+		}
+	};
+
+	const cancelQueuedJob = async (jobId: string) => {
+		try {
+			await cancelVideoGenerationJob(localStorage.token, jobId);
+			untrackJob(jobId);
+			queueJobs = queueJobs.filter((job) => job.job_id !== jobId);
+			toast.success('Queued generation cancelled.');
+		} catch (error) {
+			toast.error(`${error}`);
 		}
 	};
 
@@ -915,10 +982,8 @@ Write the final MiniMax H3 production brief now.`
 			toast.error('Seed must be a non-negative whole number.');
 			return;
 		}
-		archiveCurrentVideo();
-		// Build everything that can throw BEFORE flipping `generating`. The button is
-		// disabled while generating, so an exception raised after that point wedges the
-		// studio permanently: the timer keeps counting and no request is ever sent.
+		// Build everything that can throw BEFORE the request goes out, so a failure
+		// here cannot leave the studio thinking a job is in flight.
 		// Tolerate a malformed roster rather than throwing inside the prepare step.
 		const attachedVoices = Array.isArray(sceneVoices) ? sceneVoices : [];
 		const hasDialogue = promptHasDialogue(productionPrompt);
@@ -961,33 +1026,54 @@ Write the final MiniMax H3 production brief now.`
 			toast.error(`The generation request could not be prepared: ${error}`);
 			return;
 		}
-		generating = true;
-		startElapsedTimer();
-		localStorage.setItem(activeJobStorageKey(), jobId);
+		// Track the job before submitting: if the response is lost in transit the job
+		// may still have been accepted, and the poller will find it.
+		trackedJobIds = [...trackedJobIds, jobId];
+		writeTrackedJobs(trackedJobIds);
+		submitting = true;
 		try {
-			await startVideoGenerationJob(localStorage.token, jobId, outboundPrompt, options);
-		} catch (error) {
-			if (!String(error).includes('Server connection failed')) {
-				localStorage.removeItem(activeJobStorageKey());
-				generating = false;
-				stopElapsedTimer();
-				toast.error(`Video generation failed: ${error}`);
-				return;
-			}
-			await wait(1500);
+			let accepted: VideoGenerationJob | null = null;
 			try {
-				await startVideoGenerationJob(localStorage.token, jobId, outboundPrompt, options);
-			} catch (retryError) {
-				if (!String(retryError).includes('Server connection failed')) {
-					localStorage.removeItem(activeJobStorageKey());
-					generating = false;
-					stopElapsedTimer();
-					toast.error(`Video generation failed: ${retryError}`);
+				accepted = await startVideoGenerationJob(
+					localStorage.token,
+					jobId,
+					outboundPrompt,
+					options
+				);
+			} catch (error) {
+				if (!String(error).includes('Server connection failed')) {
+					untrackJob(jobId);
+					toast.error(`Video generation failed: ${error}`);
 					return;
 				}
+				await wait(1500);
+				try {
+					// Submitting the same job id twice is idempotent server-side, so a retry
+					// after a dropped response cannot queue the same render twice.
+					accepted = await startVideoGenerationJob(
+						localStorage.token,
+						jobId,
+						outboundPrompt,
+						options
+					);
+				} catch (retryError) {
+					if (!String(retryError).includes('Server connection failed')) {
+						untrackJob(jobId);
+						toast.error(`Video generation failed: ${retryError}`);
+						return;
+					}
+				}
 			}
+			const ahead = accepted?.position ?? 0;
+			toast.success(
+				ahead > 0
+					? `Queued with ${ahead} generation${ahead === 1 ? '' : 's'} ahead of it.`
+					: 'Generation started.'
+			);
+		} finally {
+			submitting = false;
 		}
-		await pollVideoGenerationJob(jobId);
+		void pollQueue();
 	};
 
 	const loadVideoHistory = async (showSuccess = false) => {
@@ -1105,16 +1191,27 @@ Write the final MiniMax H3 production brief now.`
 		loaded = true;
 		const handoff = await consumeSceneHandoff();
 		await loadVideoHistory();
-		const activeJobId = localStorage.getItem(activeJobStorageKey());
-		if (activeJobId) {
-			void pollVideoGenerationJob(activeJobId, true);
+		// Merge what this browser was following with what the server still has, so a
+		// generation queued from a phone shows up here too.
+		const stored = readTrackedJobs();
+		let serverJobIds: string[] = [];
+		try {
+			serverJobIds = (await listVideoGenerationJobs(localStorage.token)).map((job) => job.job_id);
+		} catch (error) {
+			// A queue listing failure must not stop the studio from loading.
+			console.error(error);
+		}
+		trackedJobIds = [...new Set([...stored, ...serverJobIds])];
+		writeTrackedJobs(trackedJobIds);
+		if (trackedJobIds.length) {
+			void pollQueue(true);
 		}
 		// Draft after history so the studio is usable while the model is thinking.
 		if (handoff) void draftPrompt();
 	});
 	onDestroy(() => {
 		destroyed = true;
-		generationPolling = false;
+		queuePolling = false;
 		stopElapsedTimer();
 	});
 </script>
@@ -1330,7 +1427,8 @@ Write the final MiniMax H3 production brief now.`
 												class="flex items-center gap-2 border-t border-gray-200 px-2 py-1.5 text-xs dark:border-gray-700"
 											>
 												<span class="min-w-0 flex-1 truncate"
-													>&lt;Picture {index + 1}&gt;{#if image.origin} · {image.origin}{/if}</span
+													>&lt;Picture {index + 1}&gt;{#if image.origin}
+														· {image.origin}{/if}</span
 												>
 												<button
 													class="shrink-0 text-gray-500 hover:text-gray-900 dark:hover:text-white"
@@ -1349,8 +1447,8 @@ Write the final MiniMax H3 production brief now.`
 							{/if}
 							<p class="mt-2 text-xs text-gray-500">
 								Order matters: images are connected to Ref2VA as Picture 1 through Picture 9. Pixels
-								go only to ComfyUI; the prompt model receives metadata and labels. Click a picture to
-								swap it for this generation only — a character's saved images are never changed.
+								go only to ComfyUI; the prompt model receives metadata and labels. Click a picture
+								to swap it for this generation only — a character's saved images are never changed.
 							</p>
 						</div>
 					{/if}
@@ -1551,16 +1649,46 @@ Write the final MiniMax H3 production brief now.`
 					<h2 class="font-semibold">4. Generate</h2>
 					<button
 						class="mt-4 flex w-full max-w-sm items-center justify-center gap-2 rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
-						disabled={generating || !promptApproved || !framesReady}
+						disabled={submitting || !promptApproved || !framesReady}
 						on:click={generateVideo}
 					>
 						<VideoCamera className="size-4.5" strokeWidth="2" />
-						{generating ? `Generating... ${elapsedSeconds}s` : 'Generate video'}
+						{submitting ? 'Submitting...' : queueJobs.length ? 'Add to queue' : 'Generate video'}
 					</button>
-					{#if generating}
+					{#if queueJobs.length}
+						<div class="mt-3 rounded-xl border border-gray-200 dark:border-gray-700">
+							<div
+								class="border-b border-gray-200 px-3 py-2 text-xs font-medium dark:border-gray-700"
+							>
+								Queue ({queueJobs.length})
+							</div>
+							<ul class="divide-y divide-gray-200 dark:divide-gray-700">
+								{#each queueJobs as job (job.job_id)}
+									<li class="flex items-center gap-3 px-3 py-2 text-xs">
+										<span class="w-16 shrink-0 tabular-nums text-gray-500">
+											{job.status === 'running' ? 'Rendering' : `Waiting`}
+										</span>
+										<span class="min-w-0 flex-1 truncate text-gray-600 dark:text-gray-300">
+											{job.label || 'Untitled brief'}
+										</span>
+										{#if job.status === 'running'}
+											<span class="shrink-0 tabular-nums text-gray-500">{elapsedSeconds}s</span>
+										{:else}
+											<span class="shrink-0 tabular-nums text-gray-400"
+												>{(job.position ?? 0) + 1} in line</span
+											>
+											<button
+												class="shrink-0 text-gray-500 hover:text-red-600"
+												on:click={() => cancelQueuedJob(job.job_id)}>Cancel</button
+											>
+										{/if}
+									</li>
+								{/each}
+							</ul>
+						</div>
 						<p class="mt-2 text-xs text-gray-500">
-							ComfyUI is rendering in the background. You can lock your phone or return later; Video
-							Studio will reconnect to this job.
+							Generations run one at a time. You can draft and queue another now, or lock your phone
+							and come back; Video Studio reconnects to the queue.
 						</p>
 					{:else if !framesReady}
 						<p class="mt-2 text-xs text-amber-600">Attach the required frame images.</p>

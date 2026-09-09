@@ -16,11 +16,17 @@ export type VideoGenerationOptions = {
 
 export type VideoGenerationJob = {
 	job_id: string;
-	status: 'queued' | 'running' | 'completed' | 'failed';
+	status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 	created_at: number;
 	updated_at: number;
 	result: Array<Record<string, any>> | null;
 	error: string | null;
+	// Generations in front of this one. 0 is running or next up, null once finished.
+	position?: number | null;
+	// When it left the queue and began rendering, so elapsed time excludes the wait.
+	started_at?: number | null;
+	// Opening of the brief, so one waiting item can be told from another.
+	label?: string | null;
 };
 
 const videoApiError = (err: any) =>
@@ -97,6 +103,55 @@ export const getVideoGenerationJob = async (
 	let error: string | null = null;
 	const res = await fetch(`${VIDEOS_API_BASE_URL}/generations/jobs/${jobId}`, {
 		method: 'GET',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			...(token && { authorization: `Bearer ${token}` })
+		}
+	})
+		.then(async (response) => {
+			if (!response.ok) throw await response.json();
+			return response.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = videoApiError(err);
+			return null;
+		});
+	if (error || !res) throw error ?? 'Server connection failed';
+	return res;
+};
+
+export const listVideoGenerationJobs = async (token: string): Promise<VideoGenerationJob[]> => {
+	let error: string | null = null;
+	const res = await fetch(`${VIDEOS_API_BASE_URL}/generations/jobs`, {
+		method: 'GET',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			...(token && { authorization: `Bearer ${token}` })
+		}
+	})
+		.then(async (response) => {
+			if (!response.ok) throw await response.json();
+			return response.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = videoApiError(err);
+			return null;
+		});
+	if (error || !res) throw error ?? 'Server connection failed';
+	return res;
+};
+
+export const cancelVideoGenerationJob = async (
+	token: string,
+	jobId: string
+): Promise<VideoGenerationJob> => {
+	let error: string | null = null;
+	const res = await fetch(`${VIDEOS_API_BASE_URL}/generations/jobs/${jobId}`, {
+		method: 'DELETE',
 		headers: {
 			Accept: 'application/json',
 			'Content-Type': 'application/json',
