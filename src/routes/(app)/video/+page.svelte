@@ -34,6 +34,9 @@
 		width: number;
 		height: number;
 		dataUrl: string;
+		// Which roster entry this slot stands for, when it came from one. Kept when the
+		// picture is swapped, because the slot still means that character in the brief.
+		origin?: string;
 	};
 	type GeneratedVideo = {
 		url: string;
@@ -129,6 +132,9 @@ Every person visible in a shot needs described behaviour for the whole of that s
 	let deletingVideoId: string | null = null;
 	let lastFileInput: HTMLInputElement;
 	let referenceFileInput: HTMLInputElement;
+	let replaceFileInput: HTMLInputElement;
+	// Which slot a pending swap will land in; null when no swap is in flight.
+	let replaceIndex: number | null = null;
 	let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 
 	$: availableModels = ($models ?? []).filter((model) => !(model?.info?.meta?.hidden ?? false));
@@ -328,6 +334,37 @@ Every person visible in a shot needs described behaviour for the whole of that s
 		markPromptForReview();
 	};
 
+	// Swapping a picture is scoped to this generation. The studio never writes to the
+	// character library, so the stored reference is untouched either way. Replacing in
+	// place rather than removing and re-adding keeps the <Picture N> numbering stable,
+	// which matters because both the drafted brief and the injected reference sheet
+	// cite pictures by number.
+	const replaceReferenceImage = (index: number) => {
+		replaceIndex = index;
+		replaceFileInput?.click();
+	};
+
+	const handleReplaceInput = async (event: Event) => {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		const index = replaceIndex;
+		// Clear first: a failed read should not leave the picker armed on a stale slot,
+		// and reselecting the same file has to fire change again.
+		input.value = '';
+		replaceIndex = null;
+		if (!file || index === null || index >= referenceImages.length) return;
+		try {
+			const frame = await readFrame(file);
+			const origin = referenceImages[index]?.origin;
+			referenceImages = referenceImages.map((item, itemIndex) =>
+				itemIndex === index ? { ...frame, origin } : item
+			);
+			markPromptForReview();
+		} catch (error) {
+			toast.error(`${error}`);
+		}
+	};
+
 	// Grab the last rendered frame of an existing clip so it can anchor the next one.
 	const captureFinalFrame = async (source: GeneratedVideo): Promise<FrameAsset> => {
 		const response = await fetch(source.url, {
@@ -491,7 +528,7 @@ Every person visible in a shot needs described behaviour for the whole of that s
 				if (images.length >= 9) break;
 				try {
 					const frame = await loadFrameFromFile(fileId, entry?.name ?? 'reference');
-					images.push(frame);
+					images.push({ ...frame, origin: entry?.name });
 					indices.push(images.length);
 				} catch (error) {
 					console.error(error);
@@ -1257,21 +1294,49 @@ Write the final MiniMax H3 production brief now.`
 								bind:this={referenceFileInput}
 								on:change={handleReferenceInput}
 							/>
+							<input
+								class="hidden"
+								type="file"
+								accept="image/png,image/jpeg,image/webp"
+								bind:this={replaceFileInput}
+								on:change={handleReplaceInput}
+							/>
 							{#if referenceImages.length}
 								<div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
 									{#each referenceImages as image, index}
 										<div
 											class="relative overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700"
 										>
-											<img
-												src={image.dataUrl}
-												alt={`Picture ${index + 1}`}
-												class="aspect-video w-full object-contain"
-											/>
+											<button
+												type="button"
+												class="group relative block w-full"
+												aria-label={image.origin
+													? `Swap Picture ${index + 1} (${image.origin}) for this generation`
+													: `Swap Picture ${index + 1} for this generation`}
+												on:click={() => replaceReferenceImage(index)}
+											>
+												<img
+													src={image.dataUrl}
+													alt={`Picture ${index + 1}`}
+													class="aspect-video w-full object-contain"
+												/>
+												<span
+													class="absolute inset-0 hidden items-center justify-center bg-black/50 text-xs font-medium text-white group-hover:flex group-focus-visible:flex"
+												>
+													Swap image
+												</span>
+											</button>
 											<div
 												class="flex items-center gap-2 border-t border-gray-200 px-2 py-1.5 text-xs dark:border-gray-700"
 											>
-												<span class="min-w-0 flex-1 truncate">&lt;Picture {index + 1}&gt;</span>
+												<span class="min-w-0 flex-1 truncate"
+													>&lt;Picture {index + 1}&gt;{#if image.origin} · {image.origin}{/if}</span
+												>
+												<button
+													class="shrink-0 text-gray-500 hover:text-gray-900 dark:hover:text-white"
+													aria-label={`Swap Picture ${index + 1}`}
+													on:click={() => replaceReferenceImage(index)}>Swap</button
+												>
 												<button
 													class="shrink-0 text-gray-500 hover:text-red-600"
 													aria-label={`Remove Picture ${index + 1}`}
@@ -1284,7 +1349,8 @@ Write the final MiniMax H3 production brief now.`
 							{/if}
 							<p class="mt-2 text-xs text-gray-500">
 								Order matters: images are connected to Ref2VA as Picture 1 through Picture 9. Pixels
-								go only to ComfyUI; the prompt model receives metadata and labels.
+								go only to ComfyUI; the prompt model receives metadata and labels. Click a picture to
+								swap it for this generation only — a character's saved images are never changed.
 							</p>
 						</div>
 					{/if}
