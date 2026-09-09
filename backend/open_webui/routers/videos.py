@@ -31,6 +31,15 @@ log = logging.getLogger(__name__)
 NUMBER_SAFE_INTEGER_MAX = 2**53 - 1
 VIDEO_GENERATION_JOBS: dict[str, dict] = {}
 VIDEO_GENERATION_TASKS: set[asyncio.Task] = set()
+# There is one ComfyUI behind this, so generations run one at a time. Submissions
+# wait here in order and a single worker drains them; without it a second submission
+# raced the first into ComfyUI and usually died against the request timeout while it
+# sat behind the other one in ComfyUI's own queue.
+VIDEO_GENERATION_QUEUE: "asyncio.Queue[str]" = asyncio.Queue()
+VIDEO_GENERATION_WORKER: Optional[asyncio.Task] = None
+# Terminal states, which is also what makes a job eligible for pruning.
+VIDEO_JOB_DONE_STATES = {"completed", "failed", "cancelled"}
+VIDEO_JOB_ACTIVE_STATES = {"queued", "running"}
 
 
 class CreateVideoForm(BaseModel):
@@ -499,6 +508,24 @@ async def video_generations(
     ]
 
 
+def _jobs_ahead(job_id: str) -> Optional[int]:
+    """How many generations are in front of this one.
+
+    0 means it is the one running, or next to start. None once it is finished.
+    Insertion order is submission order, which is the order the worker takes them.
+    """
+    job = VIDEO_GENERATION_JOBS.get(job_id)
+    if not job or job["status"] not in VIDEO_JOB_ACTIVE_STATES:
+        return None
+    ahead = 0
+    for other_id, other in VIDEO_GENERATION_JOBS.items():
+        if other_id == job_id:
+            break
+        if other["status"] in VIDEO_JOB_ACTIVE_STATES:
+            ahead += 1
+    return ahead
+
+
 def _public_video_job(job_id: str, job: dict) -> dict:
     return {
         "job_id": job_id,
@@ -507,6 +534,10 @@ def _public_video_job(job_id: str, job: dict) -> dict:
         "updated_at": job["updated_at"],
         "result": job.get("result"),
         "error": job.get("error"),
+        "position": _jobs_ahead(job_id),
+        # When it actually started rendering, so elapsed time excludes the wait.
+        "started_at": job.get("started_at"),
+        "label": job.get("label"),
     }
 
 
@@ -515,20 +546,30 @@ def _prune_video_jobs() -> None:
     stale = [
         job_id
         for job_id, job in VIDEO_GENERATION_JOBS.items()
-        if job["status"] in {"completed", "failed"} and job["updated_at"] < cutoff
+        if job["status"] in VIDEO_JOB_DONE_STATES and job["updated_at"] < cutoff
     ]
     for job_id in stale:
         VIDEO_GENERATION_JOBS.pop(job_id, None)
 
 
-async def _run_video_generation_job(
-    request: Request,
-    job_id: str,
-    form_data: CreateVideoForm,
-    user,
-) -> None:
+def _release_job_inputs(job: dict) -> None:
+    """Drop the submitted payload once it can no longer be needed.
+
+    A queued job holds its own reference images as data URLs, which run to tens of
+    megabytes each, so a finished or cancelled job must not keep them alive.
+    """
+    job.pop("request", None)
+    job.pop("form_data", None)
+    job.pop("user", None)
+
+
+async def _run_video_generation_job(job_id: str) -> None:
     job = VIDEO_GENERATION_JOBS[job_id]
+    request = job["request"]
+    form_data = job["form_data"]
+    user = job["user"]
     job["status"] = "running"
+    job["started_at"] = time.time()
     job["updated_at"] = time.time()
     try:
         regeneration_prompt = _resolve_regeneration_prompt(form_data, user)
@@ -546,6 +587,51 @@ async def _run_video_generation_job(
         )
     finally:
         job["updated_at"] = time.time()
+        _release_job_inputs(job)
+
+
+async def _video_generation_worker() -> None:
+    while True:
+        job_id = await VIDEO_GENERATION_QUEUE.get()
+        try:
+            job = VIDEO_GENERATION_JOBS.get(job_id)
+            # Cancelled while it waited, or already pruned. Nothing left to run.
+            if not job or job["status"] != "queued":
+                continue
+            await _run_video_generation_job(job_id)
+        except Exception:
+            # A crash here would drain no further jobs, so the loop swallows it.
+            log.exception("Video generation worker failed on job %s", job_id)
+        finally:
+            VIDEO_GENERATION_QUEUE.task_done()
+
+
+def _ensure_video_generation_worker() -> None:
+    """Start the drain loop on first use, and restart it if it ever died.
+
+    Started here rather than from a lifespan hook because main.py is assembled by
+    sed at image build time, where another patch is a good deal more fragile.
+    """
+    global VIDEO_GENERATION_WORKER
+    if VIDEO_GENERATION_WORKER is None or VIDEO_GENERATION_WORKER.done():
+        VIDEO_GENERATION_WORKER = asyncio.create_task(_video_generation_worker())
+        VIDEO_GENERATION_TASKS.add(VIDEO_GENERATION_WORKER)
+        VIDEO_GENERATION_WORKER.add_done_callback(VIDEO_GENERATION_TASKS.discard)
+
+
+@router.get("/generations/jobs")
+async def list_video_generation_jobs(
+    request: Request,
+    user=Depends(get_verified_user),
+):
+    """Everything of the caller's that is still waiting or running, in queue order."""
+    _check_video_access(request, user)
+    _prune_video_jobs()
+    return [
+        _public_video_job(job_id, job)
+        for job_id, job in VIDEO_GENERATION_JOBS.items()
+        if job["user_id"] == user.id and job["status"] in VIDEO_JOB_ACTIVE_STATES
+    ]
 
 
 @router.post("/generations/jobs")
@@ -564,6 +650,9 @@ async def create_video_generation_job(
         return _public_video_job(job_id, existing)
 
     now = time.time()
+    generation_form = CreateVideoForm.model_validate(
+        form_data.model_dump(exclude={"job_id"})
+    )
     VIDEO_GENERATION_JOBS[job_id] = {
         "user_id": user.id,
         "status": "queued",
@@ -571,15 +660,14 @@ async def create_video_generation_job(
         "updated_at": now,
         "result": None,
         "error": None,
+        # Enough of the brief to tell one queued item from another in the UI.
+        "label": generation_form.prompt.strip()[:120],
+        "request": request,
+        "form_data": generation_form,
+        "user": user,
     }
-    generation_form = CreateVideoForm.model_validate(
-        form_data.model_dump(exclude={"job_id"})
-    )
-    task = asyncio.create_task(
-        _run_video_generation_job(request, job_id, generation_form, user)
-    )
-    VIDEO_GENERATION_TASKS.add(task)
-    task.add_done_callback(VIDEO_GENERATION_TASKS.discard)
+    _ensure_video_generation_worker()
+    await VIDEO_GENERATION_QUEUE.put(job_id)
     return _public_video_job(job_id, VIDEO_GENERATION_JOBS[job_id])
 
 
@@ -594,6 +682,35 @@ async def get_video_generation_job(
     job = VIDEO_GENERATION_JOBS.get(key)
     if not job or job["user_id"] != user.id:
         raise HTTPException(status_code=404, detail="Video generation job not found")
+    return _public_video_job(key, job)
+
+
+@router.delete("/generations/jobs/{job_id}")
+async def cancel_video_generation_job(
+    request: Request,
+    job_id: UUID,
+    user=Depends(get_verified_user),
+):
+    """Drop a generation that has not started yet.
+
+    A running one is left alone: it is already inside ComfyUI, and interrupting it
+    there is not something this endpoint can honestly promise.
+    """
+    _check_video_access(request, user)
+    key = str(job_id)
+    job = VIDEO_GENERATION_JOBS.get(key)
+    if not job or job["user_id"] != user.id:
+        raise HTTPException(status_code=404, detail="Video generation job not found")
+    if job["status"] != "queued":
+        raise HTTPException(
+            status_code=409,
+            detail="Only a generation that is still waiting can be cancelled.",
+        )
+    # The worker skips anything no longer queued, so the entry can stay on the
+    # asyncio queue rather than being fished out of the middle of it.
+    job["status"] = "cancelled"
+    job["updated_at"] = time.time()
+    _release_job_inputs(job)
     return _public_video_job(key, job)
 
 
