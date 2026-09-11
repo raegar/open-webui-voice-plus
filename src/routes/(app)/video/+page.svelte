@@ -116,6 +116,15 @@ Every person visible in a shot needs described behaviour for the whole of that s
 	let drafting = false;
 	let generating = false;
 	let submitting = false;
+	// How many times the currently approved prompt has been sent, and when last. Any edit
+	// drops approval, which clears this, so it always describes the prompt on screen.
+	let approvedSubmissions = 0;
+	let lastSubmittedAt: number | null = null;
+	$: if (!promptApproved) {
+		approvedSubmissions = 0;
+		lastSubmittedAt = null;
+	}
+	$: seedIsSet = seed !== null && seed !== undefined && String(seed).trim() !== '';
 	// Job ids this browser is following, and the server's view of the ones still
 	// waiting or rendering. The server is authoritative on order and position, so a
 	// phone and a desktop looking at the same queue agree.
@@ -182,6 +191,11 @@ Every person visible in a shot needs described behaviour for the whole of that s
 			.join(' ')
 			.split(/\s+/)
 			.filter(Boolean).length;
+
+	const formatClock = (timestamp: number | null) =>
+		timestamp
+			? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+			: '';
 
 	// Dropping the audio is not enough on its own. H3 always generates an audio track,
 	// and the drafted brief still asserts "Their speaking voice is <Audio N>" because
@@ -913,7 +927,9 @@ Write the final MiniMax H3 production brief now.`
 							currentVideo = result;
 							// It may already be a history card if it finished before this page loaded.
 							videoHistory = videoHistory.filter((item) => item.url !== result.url);
-							seed = String(result.seed);
+							// The seed field is not filled from the finished job. With a queue it is often
+							// holding the next submission's settings, and filling it made "queue again" silently
+							// reuse this seed and render the same clip. "Use prompt" on a card restores a seed.
 							toast.success('MiniMax H3 video completed.');
 						} else {
 							toast.error('A completed generation returned no video.');
@@ -1067,6 +1083,8 @@ Write the final MiniMax H3 production brief now.`
 				}
 			}
 			const ahead = accepted?.position ?? 0;
+			approvedSubmissions += 1;
+			lastSubmittedAt = Date.now();
 			toast.success(
 				ahead > 0
 					? `Queued with ${ahead} generation${ahead === 1 ? '' : 's'} ahead of it.`
@@ -1613,11 +1631,17 @@ Write the final MiniMax H3 production brief now.`
 							</p>
 						</div>
 						<span
-							class="rounded-full px-2.5 py-1 text-xs {promptApproved
-								? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300'
-								: 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'}"
+							class="rounded-full px-2.5 py-1 text-xs {!promptApproved
+								? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+								: approvedSubmissions > 0
+									? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+									: 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300'}"
 						>
-							{promptApproved ? 'Approved' : 'Needs approval'}
+							{!promptApproved
+								? 'Needs approval'
+								: approvedSubmissions > 0
+									? 'Submitted'
+									: 'Approved'}
 						</span>
 					</div>
 					{#if voicesWithoutDialogue}
@@ -1642,7 +1666,11 @@ Write the final MiniMax H3 production brief now.`
 							disabled={!productionPrompt.trim()}
 							on:click={approvePrompt}
 						>
-							{promptApproved ? 'Prompt approved' : 'Approve this prompt'}
+							{!promptApproved
+								? 'Approve this prompt'
+								: approvedSubmissions > 0
+									? 'Prompt submitted'
+									: 'Prompt approved'}
 						</button>
 					</div>
 				</section>
@@ -1655,8 +1683,24 @@ Write the final MiniMax H3 production brief now.`
 						on:click={generateVideo}
 					>
 						<VideoCamera className="size-4.5" strokeWidth="2" />
-						{submitting ? 'Submitting...' : queueJobs.length ? 'Add to queue' : 'Generate video'}
+						{submitting
+							? 'Submitting...'
+							: approvedSubmissions > 0
+								? 'Queue this prompt again'
+								: queueJobs.length
+									? 'Add to queue'
+									: 'Generate video'}
 					</button>
+					{#if promptApproved && approvedSubmissions > 0}
+						<p class="mt-2 text-xs font-medium text-blue-700 dark:text-blue-300">
+							✓ This prompt was submitted {approvedSubmissions === 1
+								? `at ${formatClock(lastSubmittedAt)}`
+								: `${approvedSubmissions} times, most recently at ${formatClock(lastSubmittedAt)}`}.
+							Edit or redraft it to make a new one, or queue it again for another take.{#if seedIsSet}
+								The seed field is set, so another take will come out identical; clear it for a
+								different result.{/if}
+						</p>
+					{/if}
 					{#if queueJobs.length}
 						<div class="mt-3 rounded-xl border border-gray-200 dark:border-gray-700">
 							<div
