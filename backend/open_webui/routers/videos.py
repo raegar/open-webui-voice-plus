@@ -478,7 +478,7 @@ async def video_generations(
         "motion_lora": form_data.motion_lora,
         "turbo_lora": form_data.turbo_lora,
     }
-    _, url = _upload_video(
+    file_item, url = _upload_video(
         request,
         video_data,
         filename,
@@ -488,6 +488,10 @@ async def video_generations(
     )
     return [
         {
+            # The same identity fields a history item carries, so a clip archived
+            # straight from a finished job can be deleted and dated without a refresh.
+            "id": file_item.id,
+            "created_at": file_item.created_at,
             "url": url,
             "content_type": content_type,
             "prompt": form_data.prompt,
