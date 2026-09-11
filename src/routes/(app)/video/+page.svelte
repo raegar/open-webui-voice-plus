@@ -1665,7 +1665,8 @@ Write the final MiniMax H3 production brief now.`
 								Queue ({queueJobs.length})
 							</div>
 							<ul class="divide-y divide-gray-200 dark:divide-gray-700">
-								{#each queueJobs as job (job.job_id)}
+								<!-- Newest first, so the oldest - the one rendering - sits at the bottom. -->
+								{#each [...queueJobs].reverse() as job (job.job_id)}
 									<li class="flex items-center gap-3 px-3 py-2 text-xs">
 										<span class="w-16 shrink-0 tabular-nums text-gray-500">
 											{job.status === 'running' ? 'Rendering' : `Waiting`}
