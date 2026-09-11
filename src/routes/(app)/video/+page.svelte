@@ -63,7 +63,9 @@ Use contiguous [Xs-Ys] segments covering the full requested duration with no gap
 
 Each segment is 1-3 present-tense sentences describing observable motion rather than a static frame. Give every person on screen something to be doing in every segment: a listener still has posture, gaze, and a changing expression, and one left undescribed renders as a blank stare into the middle distance. Include setting, subject appearance and position, action and state change, lighting and atmosphere, plus an intentional camera angle or movement. Make events flow naturally and remain physically achievable. Imply synchronized ambience, speech, and physical sounds through the scene description; do not add separate audio sections. Preserve visible text verbatim, and dialogue verbatim up to the spoken-word budget in the constraints - beyond it, keep the strongest line and drop the rest rather than compressing the whole speech, because speech that overruns the clip length comes out garbled. Never say "show me", "create", or "generate".
 
-Frame pixels are unavailable to you. Never invent their contents. A first-frame workflow must begin exactly at the supplied frame and develop forward. A first-and-last workflow must describe a plausible continuous path that starts exactly at the first frame and lands exactly at the last frame. Treat duration and aspect ratio as hard constraints.`;
+Frame pixels are unavailable to you. Never invent their contents. A first-frame workflow must begin exactly at the supplied frame and develop forward. A first-and-last workflow must describe a plausible continuous path that starts exactly at the first frame and lands exactly at the last frame. Treat duration and aspect ratio as hard constraints.
+
+Never describe lipstick as smudged or smeared, and never describe skin, cheeks, or a face as flushed: the video model renders both badly. This holds even when the reference sheet or the conversation mentions them - describe the lipstick simply as worn, and leave any change in skin colour out.`;
 
 	const REFERENCE_PROMPT_SYSTEM = `You are an expert prompt engineer for MiniMax H3 Ref2VA. Turn the user's scenario and reference-image descriptions into a structurally compatible prompt that drives both video and audio. Output ONLY the formatted prompt.
 
@@ -85,7 +87,9 @@ overall_soundscape contains ambience and physical sounds without dialogue or mus
 
 Speech obeys real time and cannot be sped up. Keep the total spoken words across every <d> tag inside the budget given in the constraints, and keep dialogue to the stated maximum number of shots. When the scenario contains more speech than fits, stage only the strongest line or two and let the rest go unsaid; a brief that overruns the budget produces garbled, unintelligible audio, which is a worse failure than leaving a line out. Write dialogue as short spoken sentences, not paragraphs. End the summary paragraph by stating that clear intelligible speech takes priority over additional action or shot changes. Keep the soundscape quiet and uncluttered while anyone is speaking, and never ask for muttering, background chatter, or invented vocalisations.
 
-Every person visible in a shot needs described behaviour for the whole of that shot. Someone who is not speaking is never idle: state where they are looking, what their face does as they listen, how they are holding themselves, and at least one small physical response - a shift of weight, a breath, a smile starting, a hand tightening. Reactions run at the same time as the speaker rather than after them, so they cost no runtime and never justify an extra shot or an extra line of dialogue. A character left undescribed renders as a blank stare into the middle distance.`;
+Every person visible in a shot needs described behaviour for the whole of that shot. Someone who is not speaking is never idle: state where they are looking, what their face does as they listen, how they are holding themselves, and at least one small physical response - a shift of weight, a breath, a smile starting, a hand tightening. Reactions run at the same time as the speaker rather than after them, so they cost no runtime and never justify an extra shot or an extra line of dialogue. A character left undescribed renders as a blank stare into the middle distance.
+
+Never describe lipstick as smudged or smeared, and never describe skin, cheeks, or a face as flushed: the video model renders both badly. This holds even when the reference sheet or the conversation mentions them - describe the lipstick simply as worn, and leave any change in skin colour out.`;
 
 	let loaded = false;
 	let selectedModelId = '';
@@ -191,6 +195,35 @@ Every person visible in a shot needs described behaviour for the whole of that s
 			.join(' ')
 			.split(/\s+/)
 			.filter(Boolean).length;
+
+	// Looks the video model renders badly: "smudged lipstick" comes out as paint smeared
+	// across the face, and "flushed" as sunburn. Detection only - cutting the phrases out
+	// with a regex leaves sentences like "Her cheeks are." behind, so a hit is repaired
+	// by the drafting model instead. The lookahead stops "lips curl, eyeliner smudged"
+	// from reading as smudged lipstick.
+	const AVOIDED_LOOKS: RegExp[] = [
+		/\b(?:smudg|smear)\w*(?:(?!eye|mascara|kohl|brow)[^.!?\n]){0,40}?\blip(?:s|stick|\s?gloss)?\b/gi,
+		/\blip(?:s|stick|\s?gloss)?\b(?:(?!eye|mascara|kohl|brow)[^.!?\n]){0,40}?\b(?:smudg|smear)\w*/gi,
+		/\bflush(?:ed|ing)\b/gi,
+		/\b(?:a|the|faint|deep|soft|slight|pink|red|rosy|warm|hot|crimson)\s+flush\b/gi,
+		/\bflush\s+(?:of|across|over|on|in|up|spreads?|spreading|creeps?|creeping|rises?|rising|blooms?|blooming|colou?rs?)\b/gi
+	];
+
+	const findAvoidedLooks = (text: string): string[] => [
+		...new Set(
+			AVOIDED_LOOKS.flatMap((pattern) =>
+				[...(text ?? '').matchAll(pattern)].map((match) => match[0].trim().toLowerCase())
+			)
+		)
+	];
+
+	const describeLooks = (looks: string[]) =>
+		looks
+			.slice(0, 3)
+			.map((look) => `"${look}"`)
+			.join(', ');
+
+	const AVOIDED_LOOKS_REPAIR_SYSTEM = `You edit MiniMax H3 video production briefs. Return the brief exactly as given with one change: remove every mention of smudged or smeared lipstick, and every mention of flushed skin, cheeks, or faces. Where removing a phrase would leave a sentence broken, reword only that sentence, as little as possible. Change nothing else: keep every section, tag, timestamp, and speaker label as it is, and keep dialogue word for word unless a line itself contains one of those mentions. Output only the brief.`;
 
 	const formatClock = (timestamp: number | null) =>
 		timestamp
@@ -787,7 +820,29 @@ Write the final MiniMax H3 production brief now.`
 			if (!content || typeof content !== 'string') {
 				throw new Error('The selected model returned an empty prompt.');
 			}
-			productionPrompt = cleanModelPrompt(content);
+			let draft = cleanModelPrompt(content);
+			// The drafting rule forbids these, but a model working from a tracked outfit state
+			// that says "lipstick smudged" still reaches for them. One targeted repair pass keeps
+			// the sentences whole, where cutting the phrases out would not.
+			const avoidedLooks = findAvoidedLooks(draft);
+			let avoidedLeft: string[] = [];
+			if (avoidedLooks.length) {
+				try {
+					draft = await removeAvoidedLooks(draft);
+				} catch (error) {
+					console.error(error);
+				}
+				avoidedLeft = findAvoidedLooks(draft);
+				if (!avoidedLeft.length) {
+					toast.info(`Removed ${describeLooks(avoidedLooks)} from the draft.`);
+				}
+			}
+			productionPrompt = draft;
+			if (avoidedLeft.length) {
+				toast.warning(
+					`The draft still mentions ${describeLooks(avoidedLeft)}. The video model renders these badly - edit them out before approving.`
+				);
+			}
 			// The budget is guidance to the drafting model, not something it is bound by, so
 			// check the result and say so before four minutes of render proves it the hard way.
 			const spokenWords = countSpokenWords(productionPrompt);
@@ -796,7 +851,7 @@ Write the final MiniMax H3 production brief now.`
 				toast.warning(
 					`Draft ready, but it has ${spokenWords} spoken words for a ${duration}s clip (budget ${budget}). Speech that overruns the clip comes out garbled - trim the dialogue or raise the duration before generating.`
 				);
-			} else {
+			} else if (!avoidedLeft.length) {
 				toast.success('Draft ready. Review and approve it before generating.');
 			}
 		} catch (error) {
@@ -806,19 +861,44 @@ Write the final MiniMax H3 production brief now.`
 		}
 	};
 
+	const removeAvoidedLooks = async (brief: string): Promise<string> => {
+		const response = await generateOpenAIChatCompletion(localStorage.token, {
+			model: selectedModelId,
+			stream: false,
+			messages: [
+				{ role: 'system', content: AVOIDED_LOOKS_REPAIR_SYSTEM },
+				{ role: 'user', content: brief }
+			]
+		});
+		const content = response?.choices?.[0]?.message?.content;
+		if (typeof content !== 'string' || !content.trim()) return brief;
+		const repaired = cleanModelPrompt(content);
+		// Dropping a few phrases barely changes the length. A repair that shrinks or grows
+		// the brief by much has rewritten it, so keep the original and warn instead.
+		const ratio = repaired.length / Math.max(1, brief.length);
+		return ratio >= 0.8 && ratio <= 1.1 ? repaired : brief;
+	};
+
 	const approvePrompt = () => {
 		if (!productionPrompt.trim()) {
 			toast.error('Write or draft a production prompt first.');
 			return;
 		}
 		promptApproved = true;
+		// Warn rather than repair here: what is approved is exactly what gets sent.
+		const looks = findAvoidedLooks(productionPrompt);
+		if (looks.length) {
+			toast.warning(
+				`Approved, but it mentions ${describeLooks(looks)}, which the video model renders badly.`
+			);
+		}
 		const spokenWords = countSpokenWords(productionPrompt);
 		const budget = speechBudget(duration);
 		if (spokenWords > budget) {
 			toast.warning(
 				`Approved, but ${spokenWords} spoken words is over the ${budget} that fit in ${duration}s. Expect garbled speech.`
 			);
-		} else {
+		} else if (!looks.length) {
 			toast.success('Prompt approved for generation.');
 		}
 	};
