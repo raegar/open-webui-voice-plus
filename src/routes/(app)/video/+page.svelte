@@ -911,6 +911,8 @@ Write the final MiniMax H3 production brief now.`
 							// submitting is no longer the moment a new video replaces it.
 							archiveCurrentVideo();
 							currentVideo = result;
+							// It may already be a history card if it finished before this page loaded.
+							videoHistory = videoHistory.filter((item) => item.url !== result.url);
 							seed = String(result.seed);
 							toast.success('MiniMax H3 video completed.');
 						} else {
@@ -1713,7 +1715,7 @@ Write the final MiniMax H3 production brief now.`
 						<div>
 							<h2 class="font-semibold">Current video</h2>
 							<p class="mt-0.5 text-xs text-gray-500">
-								The latest result. It moves to the history below when the next generation starts.
+								The latest result. It moves to the history below when the next one finishes.
 							</p>
 						</div>
 						{#if currentVideo}
@@ -1722,13 +1724,9 @@ Write the final MiniMax H3 production brief now.`
 							>
 						{/if}
 					</div>
-					{#if generating}
-						<p
-							class="rounded-xl bg-gray-50 py-10 text-center text-sm text-gray-500 dark:bg-gray-900"
-						>
-							Rendering with ComfyUI... {elapsedSeconds}s
-						</p>
-					{:else if currentVideo}
+					<!-- A finished clip always shows. Progress on anything still queued is in
+					     the queue panel, so the placeholder is only for when nothing is done yet. -->
+					{#if currentVideo}
 						{@const video = currentVideo}
 						<article
 							class="mx-auto w-full max-w-3xl overflow-hidden rounded-xl border border-gray-200 dark:border-gray-800"
@@ -1741,7 +1739,7 @@ Write the final MiniMax H3 production brief now.`
 								<div class="ml-auto flex shrink-0 gap-3">
 									<button
 										class="font-medium text-gray-800 hover:underline disabled:opacity-40 dark:text-gray-200"
-										disabled={capturingFrame || generating}
+										disabled={capturingFrame}
 										on:click={() => continueFromVideo(video)}
 										>{capturingFrame ? 'Capturing...' : 'Continue from end'}</button
 									>
@@ -1756,6 +1754,12 @@ Write the final MiniMax H3 production brief now.`
 								</div>
 							</div>
 						</article>
+					{:else if generating}
+						<p
+							class="rounded-xl bg-gray-50 py-10 text-center text-sm text-gray-500 dark:bg-gray-900"
+						>
+							Rendering with ComfyUI... {elapsedSeconds}s
+						</p>
 					{:else}
 						<p
 							class="rounded-xl bg-gray-50 py-10 text-center text-sm text-gray-500 dark:bg-gray-900"
@@ -1812,7 +1816,7 @@ Write the final MiniMax H3 production brief now.`
 										<div class="ml-auto flex shrink-0 gap-3">
 											<button
 												class="font-medium text-gray-800 hover:underline disabled:opacity-40 dark:text-gray-200"
-												disabled={capturingFrame || generating}
+												disabled={capturingFrame}
 												on:click={() => continueFromVideo(video)}
 												>{capturingFrame ? 'Capturing...' : 'Continue from end'}</button
 											>
