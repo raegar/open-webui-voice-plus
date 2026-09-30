@@ -60,14 +60,97 @@
 	let showDeleteConfirm = false;
 	let descriptionModelId = '';
 	let lastPersistedModel = '';
+	let visionModelId = '';
+	let lastPersistedVisionModel = '';
 	let savingModelPreference = false;
+	// Which card is being described from its reference images.
+	let visionFor: string | null = null;
 	// The short brief each card expands from, and which card is mid-generation.
 	let seedPrompts: Record<string, string> = {};
 	let generatingFor: string | null = null;
 	// What a description was before the last generation, so it can be put back.
 	let previousDescriptions: Record<string, string> = {};
+	// Which control made that change, so Undo shows beside it rather than twice.
+	let undoSource: Record<string, 'brief' | 'images'> = {};
 
 	$: availableModels = ($models ?? []).filter((model) => !(model?.info?.meta?.hidden ?? false));
+	// Open WebUI treats a model with no vision flag as vision-capable, so only an
+	// explicit false rules one out.
+	$: visionModels = availableModels.filter(
+		(model) => model?.info?.meta?.capabilities?.vision ?? true
+	);
+
+	// Work mode leaves private characters off the page entirely.
+	$: visibleCharacters = $settings?.hidePrivate ? characters.filter((c) => !c.private) : characters;
+
+	type KindFilter = 'all' | (typeof KINDS)[number]['value'];
+	type SortOrder = 'name' | 'name-desc' | 'newest' | 'oldest';
+	const SORTS: { value: SortOrder; label: string }[] = [
+		{ value: 'name', label: 'Name A–Z' },
+		{ value: 'name-desc', label: 'Name Z–A' },
+		{ value: 'newest', label: 'Newest first' },
+		{ value: 'oldest', label: 'Oldest first' }
+	];
+	// Type and sort are remembered in this browser; the search box starts empty.
+	const VIEW_KEY = 'characters-page-view';
+	let search = '';
+	let kindFilter: KindFilter = 'all';
+	let sortOrder: SortOrder = 'name';
+	try {
+		const saved = JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}');
+		if (['all', ...KINDS.map((k) => k.value)].includes(saved.kind)) kindFilter = saved.kind;
+		if (SORTS.some((s) => s.value === saved.sort)) sortOrder = saved.sort;
+	} catch {
+		// Blocked or malformed storage just means the defaults.
+	}
+	const saveView = (kind: KindFilter, sort: SortOrder) => {
+		try {
+			localStorage.setItem(VIEW_KEY, JSON.stringify({ kind, sort }));
+		} catch {
+			// Not remembering the view is harmless.
+		}
+	};
+	$: saveView(kindFilter, sortOrder);
+
+	$: kindCounts = visibleCharacters.reduce(
+		(counts, c) => {
+			const kind = c.kind ?? 'character';
+			counts[kind] = (counts[kind] ?? 0) + 1;
+			return counts;
+		},
+		{} as Record<string, number>
+	);
+	// Filters on saved values, not drafts, so a card does not vanish mid-edit.
+	$: query = search.trim().toLowerCase();
+	$: shownCharacters = visibleCharacters
+		.filter((c) => kindFilter === 'all' || (c.kind ?? 'character') === kindFilter)
+		.filter(
+			(c) =>
+				!query ||
+				c.name.toLowerCase().includes(query) ||
+				c.description.toLowerCase().includes(query)
+		)
+		.sort((a, b) => {
+			if (sortOrder === 'newest') return (b.created_at ?? 0) - (a.created_at ?? 0);
+			if (sortOrder === 'oldest') return (a.created_at ?? 0) - (b.created_at ?? 0);
+			const byName = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+			return sortOrder === 'name-desc' ? -byName : byName;
+		});
+	$: filtered = kindFilter !== 'all' || query !== '';
+
+	const clearFilters = () => {
+		search = '';
+		kindFilter = 'all';
+	};
+
+	const addedOn = (seconds: number) =>
+		seconds
+			? new Date(seconds * 1000).toLocaleDateString(undefined, {
+					day: 'numeric',
+					month: 'short',
+					year: 'numeric'
+				})
+			: '';
 
 	$: canUseVideo =
 		$config?.features?.enable_video_generation &&
@@ -98,6 +181,9 @@
 			});
 			characters = [...characters, created].sort((a, b) => a.name.localeCompare(b.name));
 			newName = '';
+			// A new entry is always a character; make sure the filters are not hiding it.
+			search = '';
+			if (kindFilter !== 'character') kindFilter = 'all';
 		} catch (error) {
 			toast.error(`${error}`);
 		} finally {
@@ -129,7 +215,9 @@
 				name: copyName(character.name),
 				description: character.description,
 				image_file_ids: [...character.image_file_ids],
-				...(character.voice_file_id && { voice_file_id: character.voice_file_id })
+				kind: character.kind ?? 'character',
+				...(character.voice_file_id && { voice_file_id: character.voice_file_id }),
+				...(character.private && { private: true })
 			});
 			characters = [...characters, created].sort((a, b) => a.name.localeCompare(b.name));
 			toast.success(`${created.name} added to your library.`);
@@ -140,10 +228,13 @@
 		}
 	};
 
-	// Kind and applies_to save immediately; they are pickers, not free text.
+	// Kind and privacy save immediately; they are pickers, not free text.
 	const saveMeta = async (
 		character: VideoCharacter,
-		patch: { kind?: 'character' | 'location' | 'outfit'; applies_to_id?: string }
+		patch: {
+			kind?: 'character' | 'location' | 'outfit';
+			private?: boolean;
+		}
 	) => {
 		busyId = character.id;
 		try {
@@ -249,8 +340,10 @@ Rules:
 				: 'A line is enough: sardonic goth barista, late 20s, ex-art student';
 
 	// Models reach for fences and bold headings however plainly they are told not to.
+	// Some hosts of reasoning models also inline the reasoning as a <think> block.
 	const cleanDescription = (text: string) =>
 		text
+			.replace(/^[\s\S]*<\/think>/i, '')
 			.replace(/^\s*```[a-z]*\s*/i, '')
 			.replace(/\s*```\s*$/i, '')
 			.replace(/\*\*/g, '')
@@ -288,6 +381,7 @@ Rules:
 			const text = cleanDescription(content).slice(0, MAX_DESCRIPTION);
 			// Capture what was there before saving over it, so Undo has something to put
 			// back whether or not that text had ever been saved.
+			undoSource = { ...undoSource, [character.id]: 'brief' };
 			previousDescriptions = {
 				...previousDescriptions,
 				[character.id]: descriptionDrafts[character.id] ?? character.description
@@ -311,13 +405,169 @@ Rules:
 		previousDescriptions = rest;
 	};
 
-	const persistDescriptionModel = async () => {
+	// Reference photos describe only what can be seen, so each kind gets a prompt for
+	// its visual part alone. For a character or location that part replaces the
+	// Appearance section and leaves the rest of the description alone; an outfit's
+	// description is entirely visual, so it is replaced whole.
+	const VISION_RULES = `Rules:
+- Describe only what the images show. Where a detail is hard to make out, commit to the most plausible definite reading rather than hedging; never write "unclear", "appears to be possibly", or offer alternatives.
+- Never identify, name, or guess who anyone in the images is, and never compare them to a real person.
+- Do not describe the photograph itself: no camera angle, framing, pose, image quality, or filters.
+- Third person, present tense, plain prose. No markdown, no bullet points, no headings.`;
+
+	const VISION_SYSTEM: Record<string, string> = {
+		character: `You write the appearance section of a character reference for a video generation system, working from reference photos of that character. The text is read by a video model that has never seen this person, so it must let that model draw them.
+
+Cover, concretely: apparent age, build and height, skin tone, hair colour, length and style, eye colour, face shape, distinguishing features such as freckles, scars, tattoos, piercings, or glasses, and the clothes they are wearing.
+
+Every image shows the same person. Describe the features that stay consistent across them. Where the images disagree on clothing or hairstyle, describe what the first image shows. Leave out the background and anyone else in the frame.
+
+${VISION_RULES}`,
+		location: `You write the appearance section of a location reference for a video generation system, working from reference photos of the place. The text is read by a video model that has never seen it.
+
+Cover: size and layout, surfaces and materials, colours, light sources and how the light falls, furniture, and the objects that fill it.
+
+Every image shows the same place. This is an environment, never a subject: leave out any people in the images, and never give the place actions or intent.
+
+${VISION_RULES}`,
+		outfit: `You write wardrobe references for a video generation system, working from reference photos of a set of clothing. The text is read by a video model that has never seen the clothes.
+
+Cover every garment in turn: each piece, its cut and fit, fabric and texture, colour and pattern, condition and wear, and how it sits on the body. Then footwear, then accessories and jewellery. Describe what is visible rather than naming a brand, a designer, or a style alone.
+
+Every image shows the same outfit. Describe the clothing only. Never describe the face, body, hair, age, or identity of anyone wearing it: these garments are placed on a character defined elsewhere.
+
+${VISION_RULES}`
+	};
+
+	// Headings the text generator writes; the appearance section runs from its
+	// heading to the next of these, or to the end.
+	const SECTION_HEADINGS = /^(background and personality|character and use|appearance)\s*:?\s*$/i;
+	const APPEARANCE_HEADING = /^appearance\s*:?\s*$/i;
+
+	// Returns the description with its appearance section cut out, and where to put
+	// a new one back.
+	const splitAppearance = (description: string) => {
+		const lines = description.split('\n');
+		const start = lines.findIndex((line) => APPEARANCE_HEADING.test(line.trim()));
+		if (start === -1) return { before: description.trimEnd(), after: '' };
+		let end = lines.length;
+		for (let i = start + 1; i < lines.length; i++) {
+			if (SECTION_HEADINGS.test(lines[i].trim())) {
+				end = i;
+				break;
+			}
+		}
+		return {
+			before: lines.slice(0, start).join('\n').trimEnd(),
+			after: lines.slice(end).join('\n').trim()
+		};
+	};
+
+	const joinAppearance = (before: string, appearance: string, after: string) =>
+		[before, `Appearance\n${appearance}`, after].filter(Boolean).join('\n\n');
+
+	// Phone photos run to several megabytes; a long edge of 1024px keeps the request
+	// small and is as much as vision models take in anyway.
+	const MAX_IMAGE_EDGE = 1024;
+
+	const loadImageDataUrl = async (fileId: string) => {
+		const res = await fetch(imageUrl(fileId), {
+			headers: { Authorization: `Bearer ${localStorage.token}` },
+			credentials: 'include'
+		});
+		if (!res.ok) throw new Error(`a reference image could not be loaded (${res.status})`);
+		const bitmap = await createImageBitmap(await res.blob());
+		try {
+			const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(bitmap.width, bitmap.height));
+			const canvas = document.createElement('canvas');
+			canvas.width = Math.round(bitmap.width * scale);
+			canvas.height = Math.round(bitmap.height * scale);
+			const context = canvas.getContext('2d');
+			if (!context) throw new Error('the image could not be prepared');
+			context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+			return canvas.toDataURL('image/jpeg', 0.9);
+		} finally {
+			bitmap.close();
+		}
+	};
+
+	const describeFromImages = async (character: VideoCharacter) => {
+		if (character.image_file_ids.length === 0) {
+			toast.error('Add a reference image first.');
+			return;
+		}
+		if (!visionModelId) {
+			toast.error('Choose a vision model first.');
+			return;
+		}
+		const kind = character.kind ?? 'character';
+		const current = descriptionDrafts[character.id] ?? character.description;
+		const { before, after } =
+			kind === 'outfit' ? { before: '', after: '' } : splitAppearance(current);
+		// Whatever the rest of the description leaves of the limit, less the heading
+		// and the blank lines around it.
+		const budget =
+			MAX_DESCRIPTION -
+			(kind === 'outfit' ? 0 : before.length + after.length + '\n\nAppearance\n\n\n'.length);
+		if (budget < 400) {
+			toast.error(
+				'The rest of the description leaves too little room for an appearance section. Shorten it first.'
+			);
+			return;
+		}
+
+		visionFor = character.id;
+		try {
+			const images = await Promise.all(character.image_file_ids.map(loadImageDataUrl));
+			const response = await generateOpenAIChatCompletion(localStorage.token, {
+				model: visionModelId,
+				stream: false,
+				messages: [
+					{ role: 'system', content: VISION_SYSTEM[kind] ?? VISION_SYSTEM.character },
+					{
+						role: 'user',
+						content: [
+							{
+								type: 'text',
+								text: `Name: ${character.name}\n\nWrite the description from ${
+									images.length === 1 ? 'this image' : `these ${images.length} images`
+								} now, in 120 to 250 words and never more than ${Math.min(budget, 2500)} characters. Refer to them as ${character.name}.`
+							},
+							...images.map((url) => ({ type: 'image_url', image_url: { url } }))
+						]
+					}
+				]
+			});
+			const content = response?.choices?.[0]?.message?.content;
+			if (typeof content !== 'string' || !content.trim()) {
+				throw new Error('The model returned an empty description.');
+			}
+			// A model that repeats the heading would otherwise leave it doubled.
+			const visual = cleanDescription(content)
+				.replace(/^appearance\s*:?\s*\n+/i, '')
+				.slice(0, budget);
+			const text = kind === 'outfit' ? visual : joinAppearance(before, visual, after);
+			undoSource = { ...undoSource, [character.id]: 'images' };
+			previousDescriptions = { ...previousDescriptions, [character.id]: current };
+			descriptionDrafts = { ...descriptionDrafts, [character.id]: text };
+			await saveField(character, { description: text });
+			toast.success(`Appearance described from ${character.name}'s images.`);
+		} catch (error) {
+			toast.error(`The images could not be described: ${error}`);
+		} finally {
+			visionFor = null;
+		}
+	};
+
+	const persistModelPreference = async (
+		patch: { characterDescriptionModel: string } | { characterVisionModel: string }
+	) => {
 		savingModelPreference = true;
 		try {
-			settings.set({ ...$settings, characterDescriptionModel: descriptionModelId });
+			settings.set({ ...$settings, ...patch });
 			await updateUserSettings(localStorage.token, { ui: $settings });
 		} catch (error) {
-			toast.error(`The description model preference could not be saved: ${error}`);
+			toast.error(`The model preference could not be saved: ${error}`);
 		} finally {
 			savingModelPreference = false;
 		}
@@ -326,7 +576,12 @@ Rules:
 	// Selector does not dispatch a change event, so watch the value instead.
 	$: if (loaded && descriptionModelId && descriptionModelId !== lastPersistedModel) {
 		lastPersistedModel = descriptionModelId;
-		void persistDescriptionModel();
+		void persistModelPreference({ characterDescriptionModel: descriptionModelId });
+	}
+
+	$: if (loaded && visionModelId && visionModelId !== lastPersistedVisionModel) {
+		lastPersistedVisionModel = visionModelId;
+		void persistModelPreference({ characterVisionModel: visionModelId });
 	}
 
 	const confirmDelete = (character: VideoCharacter) => {
@@ -472,6 +727,14 @@ Rules:
 			availableModels[0]?.id ??
 			'';
 		lastPersistedModel = descriptionModelId;
+		const knownVision = (id?: string) =>
+			id && visionModels.some((model) => model.id === id) ? id : undefined;
+		visionModelId =
+			knownVision($settings?.characterVisionModel) ??
+			knownVision(descriptionModelId) ??
+			visionModels[0]?.id ??
+			'';
+		lastPersistedVisionModel = visionModelId;
 		loaded = true;
 		await load();
 	});
@@ -555,23 +818,91 @@ Rules:
 								triggerClassName="text-sm"
 							/>
 						</div>
+						<span class="text-xs text-gray-500">Vision model</span>
+						<div class="w-64 max-w-full">
+							<Selector
+								placeholder="Select a model"
+								items={visionModels.map((model) => ({
+									value: model.id,
+									label: model.name,
+									model
+								}))}
+								bind:value={visionModelId}
+								className="w-full"
+								triggerClassName="text-sm"
+							/>
+						</div>
 						{#if savingModelPreference}
 							<span class="text-xs text-gray-400">saving...</span>
 						{/if}
 					</div>
 				</section>
 
+				{#if !loading && visibleCharacters.length > 0}
+					<div class="flex flex-wrap items-center gap-2">
+						<input
+							type="search"
+							class="min-w-0 flex-1 basis-48 rounded-xl border border-gray-200 bg-transparent px-3 py-1.5 text-sm outline-none focus:border-gray-500 dark:border-gray-700"
+							placeholder="Search names and descriptions"
+							aria-label="Search characters"
+							bind:value={search}
+						/>
+						<div
+							class="flex shrink-0 rounded-xl border border-gray-200 p-0.5 text-xs dark:border-gray-700"
+							role="group"
+							aria-label="Filter by type"
+						>
+							{#each [{ value: 'all', label: 'All' }, ...KINDS] as k}
+								{@const count =
+									k.value === 'all' ? visibleCharacters.length : (kindCounts[k.value] ?? 0)}
+								<button
+									class="rounded-lg px-2.5 py-1 {kindFilter === k.value
+										? 'bg-gray-100 font-medium dark:bg-gray-800'
+										: 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-100'}"
+									aria-pressed={kindFilter === k.value}
+									on:click={() => (kindFilter = k.value)}
+								>
+									{k.value === 'all' ? k.label : `${k.label}s`}
+									<span class="text-gray-400">{count}</span>
+								</button>
+							{/each}
+						</div>
+						<select
+							class="shrink-0 rounded-xl border border-gray-200 bg-transparent px-2 py-1.5 text-xs dark:border-gray-700"
+							aria-label="Sort"
+							bind:value={sortOrder}
+						>
+							{#each SORTS as s}
+								<option value={s.value}>{s.label}</option>
+							{/each}
+						</select>
+					</div>
+				{/if}
+
 				{#if loading}
 					<div class="flex justify-center py-10"><Spinner className="size-5" /></div>
-				{:else if characters.length === 0}
+				{:else if shownCharacters.length === 0}
 					<p
 						class="rounded-2xl border border-gray-200 py-12 text-center text-sm text-gray-500 dark:border-gray-800"
 					>
-						No characters yet. Add one above, then give them a description and reference images.
+						{#if characters.length === 0}
+							No characters yet. Add one above, then give them a description and reference images.
+						{:else if filtered && visibleCharacters.length > 0}
+							Nothing matches.
+							<button class="font-medium underline" on:click={clearFilters}>Clear filters</button>
+						{:else}
+							No characters to show.
+						{/if}
 					</p>
 				{:else}
+					{#if filtered}
+						<p class="-mt-2 text-xs text-gray-500">
+							Showing {shownCharacters.length} of {visibleCharacters.length}.
+							<button class="underline" on:click={clearFilters}>Clear</button>
+						</p>
+					{/if}
 					<div class="grid gap-4 lg:grid-cols-2">
-						{#each characters as character (character.id)}
+						{#each shownCharacters as character (character.id)}
 							{@const draft = descriptionDrafts[character.id] ?? character.description}
 							{@const over = draft.length - MAX_DESCRIPTION}
 							<article class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
@@ -605,21 +936,28 @@ Rules:
 											<option value={k.value}>{k.label}</option>
 										{/each}
 									</select>
+									<label
+										class="flex items-center gap-1 text-gray-500"
+										title="Hidden while work mode is on in Settings"
+									>
+										<input
+											type="checkbox"
+											class="size-3.5 accent-gray-700"
+											checked={character.private}
+											disabled={busyId === character.id}
+											on:change={(e) => saveMeta(character, { private: e.currentTarget.checked })}
+										/>
+										Private
+									</label>
 									{#if (character.kind ?? 'character') === 'outfit'}
-										<select
-											class="rounded-lg border border-gray-200 bg-transparent px-2 py-1 text-xs dark:border-gray-700"
-											value={character.applies_to_id ?? ''}
-											on:change={(e) =>
-												saveMeta(character, { applies_to_id: e.currentTarget.value })}
+										<span class="text-gray-400"
+											>Choose it for any character in a chat's character panel.</span
 										>
-											<option value="">Not assigned</option>
-											{#each characters.filter((c) => (c.kind ?? 'character') === 'character') as person}
-												<option value={person.id}>Worn by {person.name}</option>
-											{/each}
-										</select>
+									{:else if (character.kind ?? 'character') === 'location'}
+										<span class="text-gray-400">Sets the scene in chats it is attached to.</span>
 									{/if}
-									{#if (character.kind ?? 'character') !== 'character'}
-										<span class="text-gray-400">Scene reference, not a chat personality.</span>
+									{#if character.created_at}
+										<span class="ml-auto text-gray-400">Added {addedOn(character.created_at)}</span>
 									{/if}
 								</div>
 
@@ -655,6 +993,7 @@ Rules:
 										<button
 											class="shrink-0 rounded-lg bg-black px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40 dark:bg-white dark:text-black"
 											disabled={generatingFor === character.id ||
+												visionFor === character.id ||
 												!(seedPrompts[character.id] ?? '').trim() ||
 												!descriptionModelId}
 											on:click={() => describeCharacter(character)}
@@ -666,7 +1005,7 @@ Rules:
 										<span class="min-w-0 flex-1"
 											>Expands a short brief into a full description, replacing what is above.</span
 										>
-										{#if previousDescriptions[character.id] !== undefined}
+										{#if previousDescriptions[character.id] !== undefined && undoSource[character.id] === 'brief'}
 											<button
 												class="shrink-0 hover:underline"
 												on:click={() => undoDescription(character)}>Undo</button
@@ -700,31 +1039,59 @@ Rules:
 										>
 									{/if}
 								</div>
-								<div
-									class="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3 dark:border-gray-850"
-								>
-									<span class="text-xs font-medium">Voice</span>
-									{#if character.voice_file_id}
-										<!-- svelte-ignore a11y-media-has-caption -->
-										<audio
-											class="h-8 max-w-[15rem] flex-1"
-											controls
-											src={imageUrl(character.voice_file_id)}
-										></audio>
+								{#if character.image_file_ids.length > 0}
+									<div class="mt-2 flex flex-wrap items-center gap-2">
 										<button
-											class="text-xs text-gray-500 hover:underline"
-											on:click={() => removeVoice(character)}>Remove</button
+											class="shrink-0 rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium hover:border-gray-500 disabled:opacity-40 dark:border-gray-700"
+											disabled={visionFor === character.id ||
+												generatingFor === character.id ||
+												busyId === character.id ||
+												!visionModelId}
+											on:click={() => describeFromImages(character)}
 										>
-									{:else}
-										<button
-											class="rounded-lg border border-dashed border-gray-300 px-2.5 py-1 text-xs text-gray-500 hover:border-gray-500 dark:border-gray-700"
-											on:click={() => pickVoice(character.id)}>Add voice reference</button
-										>
-										<span class="text-xs text-gray-400"
-											>Optional. A few seconds of clean speech.</span
-										>
-									{/if}
-								</div>
+											{visionFor === character.id ? 'Looking...' : 'Describe from images'}
+										</button>
+										<span class="min-w-0 flex-1 text-[11px] text-gray-500">
+											{(character.kind ?? 'character') === 'outfit'
+												? 'Writes the description from these images, replacing what is above.'
+												: 'Writes the Appearance part from these images and keeps the rest.'}
+										</span>
+										{#if previousDescriptions[character.id] !== undefined && undoSource[character.id] === 'images'}
+											<button
+												class="shrink-0 text-[11px] text-gray-500 hover:underline"
+												on:click={() => undoDescription(character)}>Undo</button
+											>
+										{/if}
+									</div>
+								{/if}
+								<!-- Outfits never speak; the section stays only to remove a voice set before the kind changed. -->
+								{#if (character.kind ?? 'character') !== 'outfit' || character.voice_file_id}
+									<div
+										class="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3 dark:border-gray-850"
+									>
+										<span class="text-xs font-medium">Voice</span>
+										{#if character.voice_file_id}
+											<!-- svelte-ignore a11y-media-has-caption -->
+											<audio
+												class="h-8 max-w-[15rem] flex-1"
+												controls
+												src={imageUrl(character.voice_file_id)}
+											></audio>
+											<button
+												class="text-xs text-gray-500 hover:underline"
+												on:click={() => removeVoice(character)}>Remove</button
+											>
+										{:else}
+											<button
+												class="rounded-lg border border-dashed border-gray-300 px-2.5 py-1 text-xs text-gray-500 hover:border-gray-500 dark:border-gray-700"
+												on:click={() => pickVoice(character.id)}>Add voice reference</button
+											>
+											<span class="text-xs text-gray-400"
+												>Optional. A few seconds of clean speech.</span
+											>
+										{/if}
+									</div>
+								{/if}
 								<p class="mt-2 text-xs text-gray-500">
 									{character.image_file_ids.length}/{MAX_IMAGES_PER_CHARACTER} reference images.
 									{#if character.image_file_ids.length === 0}

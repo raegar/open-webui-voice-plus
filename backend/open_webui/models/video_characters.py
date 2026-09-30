@@ -20,7 +20,7 @@ from uuid import uuid4
 
 from open_webui.internal.db import Base, engine, get_db
 from pydantic import BaseModel, Field
-from sqlalchemy import BigInteger, Column, Integer, String, Text, inspect, text
+from sqlalchemy import BigInteger, Boolean, Column, Integer, String, Text, inspect, text
 
 
 log = logging.getLogger(__name__)
@@ -55,8 +55,12 @@ class VideoCharacter(Base):
     voice_file_id = Column(String, nullable=False, default="")
     # character | location | outfit. See REFERENCE_KINDS.
     kind = Column(String, nullable=False, default="character")
-    # For an outfit: the character it belongs to, or "" when unassigned.
+    # Legacy: an outfit used to name the one character it belonged to. Outfits are
+    # now chosen per character in each chat (video_chat_character.outfit_id), so
+    # several characters can share one; this is read only by the migration.
     applies_to_id = Column(String, nullable=False, default="")
+    # Hidden everywhere while the user's work mode (hidePrivate setting) is on.
+    private = Column(Boolean, nullable=False, default=False)
     created_at = Column(BigInteger, nullable=False)
     updated_at = Column(BigInteger, nullable=False)
 
@@ -72,7 +76,20 @@ class VideoChatCharacter(Base):
     # What this character is currently wearing / their state of dress in this chat.
     # Mutable per chat, unlike the library description, which is their default look.
     state = Column(Text, nullable=False, default="")
+    # The library outfit this character wears in this chat, or "" for their own
+    # clothes. Sits between the description (default look) and state (what has
+    # changed during the scene), so either can be edited without losing the other.
+    outfit_id = Column(String, nullable=False, default="")
     created_at = Column(BigInteger, nullable=False)
+
+
+class VideoOutfitModel(BaseModel):
+    """The parts of an outfit a chat needs: text for the model, images for video."""
+
+    id: str
+    name: str
+    description: str
+    image_file_ids: list[str]
 
 
 class VideoCharacterModel(BaseModel):
@@ -84,8 +101,10 @@ class VideoCharacterModel(BaseModel):
     voice_file_id: str
     kind: str
     applies_to_id: str
+    private: bool = False
     # Only populated by get_for_chat; a library listing has no per-chat state.
     state: str = ""
+    outfit: Optional[VideoOutfitModel] = None
     created_at: int
     updated_at: int
 
@@ -97,6 +116,7 @@ class VideoCharacterForm(BaseModel):
     voice_file_id: str = ""
     kind: Literal["character", "location", "outfit"] = "character"
     applies_to_id: str = ""
+    private: bool = False
 
 
 class VideoCharacterUpdateForm(BaseModel):
@@ -106,6 +126,7 @@ class VideoCharacterUpdateForm(BaseModel):
     voice_file_id: Optional[str] = None
     kind: Optional[Literal["character", "location", "outfit"]] = None
     applies_to_id: Optional[str] = None
+    private: Optional[bool] = None
 
 
 def _to_model(row: VideoCharacter) -> VideoCharacterModel:
@@ -122,6 +143,7 @@ def _to_model(row: VideoCharacter) -> VideoCharacterModel:
         voice_file_id=row.voice_file_id or "",
         kind=row.kind if row.kind in REFERENCE_KINDS else "character",
         applies_to_id=row.applies_to_id or "",
+        private=bool(row.private),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -156,6 +178,7 @@ class VideoCharactersTable:
                 voice_file_id=form.voice_file_id or "",
                 kind=form.kind,
                 applies_to_id=form.applies_to_id or "",
+                private=form.private,
                 position=0,
                 created_at=now,
                 updated_at=now,
@@ -186,6 +209,8 @@ class VideoCharactersTable:
                 row.kind = form.kind
             if form.applies_to_id is not None:
                 row.applies_to_id = form.applies_to_id
+            if form.private is not None:
+                row.private = form.private
             row.updated_at = int(time.time())
             db.commit()
             db.refresh(row)
@@ -197,11 +222,10 @@ class VideoCharactersTable:
             db.query(VideoChatCharacter).filter_by(
                 user_id=user_id, character_id=id
             ).delete()
-            # Outfits that pointed at this character become unassigned rather than
-            # dangling, so they still render as a generic wardrobe reference.
-            db.query(VideoCharacter).filter_by(
-                user_id=user_id, applies_to_id=id
-            ).update({"applies_to_id": ""})
+            # Characters wearing a deleted outfit go back to their own clothes.
+            db.query(VideoChatCharacter).filter_by(
+                user_id=user_id, outfit_id=id
+            ).update({"outfit_id": ""})
             deleted = db.query(VideoCharacter).filter_by(id=id, user_id=user_id).delete()
             db.commit()
             return bool(deleted)
@@ -216,12 +240,15 @@ class VideoCharactersTable:
             )
             if not links:
                 return []
+            wanted = {link.character_id for link in links} | {
+                link.outfit_id for link in links if link.outfit_id
+            }
             rows = {
                 row.id: row
                 for row in db.query(VideoCharacter)
                 .filter(
                     VideoCharacter.user_id == user_id,
-                    VideoCharacter.id.in_([link.character_id for link in links]),
+                    VideoCharacter.id.in_(wanted),
                 )
                 .all()
             }
@@ -232,6 +259,16 @@ class VideoCharactersTable:
                     continue
                 model = _to_model(row)
                 model.state = link.state or ""
+                outfit = rows.get(link.outfit_id) if link.outfit_id else None
+                # An entry whose kind was changed away from outfit is no longer worn.
+                if outfit is not None and outfit.kind == "outfit":
+                    worn = _to_model(outfit)
+                    model.outfit = VideoOutfitModel(
+                        id=worn.id,
+                        name=worn.name,
+                        description=worn.description,
+                        image_file_ids=worn.image_file_ids,
+                    )
                 models.append(model)
             return models
 
@@ -285,6 +322,22 @@ class VideoCharactersTable:
             db.commit()
             return True
 
+    def set_outfit(
+        self, user_id: str, chat_id: str, character_id: str, outfit_id: str
+    ) -> bool:
+        """Dress an attached character in a library outfit for this chat, or "" to clear."""
+        with get_db() as db:
+            link = (
+                db.query(VideoChatCharacter)
+                .filter_by(user_id=user_id, chat_id=chat_id, character_id=character_id)
+                .first()
+            )
+            if not link:
+                return False
+            link.outfit_id = outfit_id
+            db.commit()
+            return True
+
     def detach(self, user_id: str, chat_id: str, character_id: str) -> bool:
         with get_db() as db:
             deleted = (
@@ -314,12 +367,17 @@ def _add_missing_columns() -> None:
             "voice_file_id": "VARCHAR NOT NULL DEFAULT ''",
             "kind": "VARCHAR NOT NULL DEFAULT 'character'",
             "applies_to_id": "VARCHAR NOT NULL DEFAULT ''",
+            "private": "BOOLEAN NOT NULL DEFAULT FALSE",
         }
         missing = {n: d for n, d in wanted.items() if n not in existing}
         link_existing = {
             c["name"] for c in inspect(engine).get_columns("video_chat_character")
         }
-        link_missing = {} if "state" in link_existing else {"state": "TEXT NOT NULL DEFAULT ''"}
+        link_wanted = {
+            "state": "TEXT NOT NULL DEFAULT ''",
+            "outfit_id": "VARCHAR NOT NULL DEFAULT ''",
+        }
+        link_missing = {n: d for n, d in link_wanted.items() if n not in link_existing}
         if not missing and not link_missing:
             return
         with engine.begin() as connection:
@@ -383,5 +441,58 @@ def _migrate_chat_scoped_characters() -> None:
         log.exception("Video character migration failed")
 
 
+def _migrate_outfit_attachments() -> None:
+    """Turn outfits attached to a chat directly into outfits worn by a character.
+
+    An outfit used to be attached to a chat like a person and name its wearer through
+    applies_to_id. Now the wearer's own attachment carries outfit_id. Where the named
+    wearer is attached to the same chat, they are dressed in the outfit; either way the
+    outfit's own attachment is removed, since outfits are no longer attached alone.
+    Idempotent: once converted, no chat has an outfit attached.
+    """
+    try:
+        with get_db() as db:
+            outfits = {
+                row.id: row
+                for row in db.query(VideoCharacter).filter_by(kind="outfit").all()
+            }
+            if not outfits:
+                return
+            outfit_links = (
+                db.query(VideoChatCharacter)
+                .filter(VideoChatCharacter.character_id.in_(list(outfits)))
+                .all()
+            )
+            if not outfit_links:
+                return
+            dressed = 0
+            for outfit_link in outfit_links:
+                wearer_id = outfits[outfit_link.character_id].applies_to_id
+                wearer = (
+                    db.query(VideoChatCharacter)
+                    .filter_by(
+                        user_id=outfit_link.user_id,
+                        chat_id=outfit_link.chat_id,
+                        character_id=wearer_id,
+                    )
+                    .first()
+                    if wearer_id
+                    else None
+                )
+                if wearer is not None and not wearer.outfit_id:
+                    wearer.outfit_id = outfit_link.character_id
+                    dressed += 1
+                db.delete(outfit_link)
+            db.commit()
+            log.info(
+                "Converted %d chat-attached outfits (%d now worn by a character)",
+                len(outfit_links),
+                dressed,
+            )
+    except Exception:
+        log.exception("Outfit attachment migration failed")
+
+
 _add_missing_columns()
 _migrate_chat_scoped_characters()
+_migrate_outfit_attachments()

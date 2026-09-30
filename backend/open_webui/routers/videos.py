@@ -55,8 +55,15 @@ class CreateVideoForm(BaseModel):
     # LoRA path (euler / 12 steps / shift 6 whenever either is on).
     # Turbo defaults on: it is the speed win and has tested clean.
     motion_lora: bool = False
+    # Which file fills the motion slot when motion_lora is on.
+    motion_lora_variant: Literal["hmmotion", "m3_unlocked"] = "hmmotion"
     turbo_lora: bool = True
     seed: Optional[int] = Field(default=None, ge=0, le=2**63 - 1)
+    # Filming style the brief was drafted with. The studio owns the catalogue; the
+    # server only records it, so a chat can restore its style on another device.
+    style: Optional[str] = Field(default=None, max_length=64)
+    # Whose eyes a point-of-view style films from, recorded for the same reason.
+    pov_subject: Optional[str] = Field(default=None, max_length=200)
     chat_id: Optional[str] = None
     message_id: Optional[str] = None
 
@@ -194,7 +201,9 @@ def _upload_video(request, video_data, filename, content_type, metadata, user):
         )
     return file_item, request.app.url_path_for("get_file_content_by_id", id=file_item.id)
 
-def _get_video_history_items(request: Request, user, limit: int) -> list[dict]:
+def _get_video_history_items(
+    request: Request, user, limit: int, chat_id: Optional[str] = None
+) -> list[dict]:
     files = sorted(
         Files.get_files_by_user_id(user.id),
         key=lambda item: (item.created_at or 0, item.id),
@@ -213,6 +222,8 @@ def _get_video_history_items(request: Request, user, limit: int) -> list[dict]:
             and prompt.strip()
         ):
             continue
+        if chat_id is not None and generation.get("chat_id") != chat_id:
+            continue
         seed = generation.get("seed")
         items.append(
             {
@@ -230,6 +241,11 @@ def _get_video_history_items(request: Request, user, limit: int) -> list[dict]:
                 "megapixels": generation.get("megapixels", 0.2),
                 "duration": generation.get("duration", 3),
                 "seed": str(seed) if seed is not None else "",
+                "style": generation.get("style") or "default",
+                "pov_subject": generation.get("pov_subject") or "",
+                # Absent for clips made before render time was recorded.
+                "generation_seconds": generation.get("generation_seconds"),
+                "chat_id": generation.get("chat_id"),
                 "has_first_frame": bool(generation.get("has_first_frame", False)),
                 "has_last_frame": bool(generation.get("has_last_frame", False)),
                 "reference_image_count": generation.get("reference_image_count", 0),
@@ -254,10 +270,12 @@ def _check_video_access(request: Request, user) -> None:
 async def get_video_history(
     request: Request,
     limit: int = Query(default=50, ge=1, le=100),
+    # Only videos generated for this chat, so a chat can find its own latest seed.
+    chat_id: Optional[str] = Query(default=None),
     user=Depends(get_verified_user),
 ):
     _check_video_access(request, user)
-    return _get_video_history_items(request, user, limit)
+    return _get_video_history_items(request, user, limit, chat_id)
 
 
 def _verify_owns_files(user, file_ids: list[str]) -> None:
@@ -321,6 +339,11 @@ async def attach_video_character(
     user=Depends(get_verified_user),
 ):
     _check_video_access(request, user)
+    target = VideoCharacters.get_by_id(user.id, character_id)
+    if target and target.kind == "outfit":
+        raise HTTPException(
+            status_code=400, detail="Outfits are worn by a character, not attached alone"
+        )
     if not VideoCharacters.attach(user.id, chat_id, character_id):
         raise HTTPException(status_code=404, detail="Character not found")
     return {"attached": True}
@@ -341,6 +364,29 @@ async def set_video_character_state(
     """Record what an attached character is currently wearing in this chat."""
     _check_video_access(request, user)
     if not VideoCharacters.set_state(user.id, chat_id, character_id, form_data.state):
+        raise HTTPException(status_code=404, detail="Character is not attached to this chat")
+    return {"updated": True}
+
+
+class VideoCharacterOutfitForm(BaseModel):
+    outfit_id: str = ""
+
+
+@router.post("/characters/chat/{chat_id}/outfit/{character_id}")
+async def set_video_character_outfit(
+    request: Request,
+    chat_id: str,
+    character_id: str,
+    form_data: VideoCharacterOutfitForm,
+    user=Depends(get_verified_user),
+):
+    """Dress an attached character in one of the caller's outfits, or clear it."""
+    _check_video_access(request, user)
+    if form_data.outfit_id:
+        outfit = VideoCharacters.get_by_id(user.id, form_data.outfit_id)
+        if not outfit or outfit.kind != "outfit":
+            raise HTTPException(status_code=400, detail="Unknown outfit")
+    if not VideoCharacters.set_outfit(user.id, chat_id, character_id, form_data.outfit_id):
         raise HTTPException(status_code=404, detail="Character is not attached to this chat")
     return {"updated": True}
 
@@ -445,6 +491,8 @@ async def video_generations(
         request.app.state.config.COMFYUI_VIDEO_API_KEY,
         request.app.state.config.COMFYUI_VIDEO_TIMEOUT,
     )
+    # Render time only: the job queue wait happens before this function is called.
+    render_started = time.monotonic()
     video_data, filename, content_type = await client.generate(
         form_data.prompt,
         form_data.aspect_ratio,
@@ -457,7 +505,9 @@ async def video_generations(
         reference_audios,
         form_data.motion_lora,
         form_data.turbo_lora,
+        motion_lora_variant=form_data.motion_lora_variant,
     )
+    generation_seconds = round(time.monotonic() - render_started, 1)
     generation_metadata = {
         **form_data.model_dump(
             exclude={
@@ -476,7 +526,9 @@ async def video_generations(
         "reference_image_count": len(reference_images),
         "reference_audio_count": len(reference_audios),
         "motion_lora": form_data.motion_lora,
+        "motion_lora_variant": form_data.motion_lora_variant,
         "turbo_lora": form_data.turbo_lora,
+        "generation_seconds": generation_seconds,
     }
     file_item, url = _upload_video(
         request,
@@ -508,6 +560,9 @@ async def video_generations(
             "megapixels": form_data.megapixels,
             "duration": form_data.duration,
             "seed": str(seed),
+            "style": form_data.style or "default",
+            "pov_subject": form_data.pov_subject or "",
+            "generation_seconds": generation_seconds,
         }
     ]
 

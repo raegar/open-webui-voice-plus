@@ -20,10 +20,18 @@ MAX_REFERENCE_AUDIOS = 3
 # graph is left exactly as it was so turning the toggle off reproduces the known
 # good 20-step res_multistep result without a rebuild.
 MOTION_LORA_NAME = "hmmotion_minimax-h3_epoch12.safetensors"
+# Interchangeable motion LoRAs: at most one loads, in the motion slot. Each entry
+# is (file, strength, node title). M3 Unlocked ships no recommended strength, so
+# it starts at 1.0 like hmmotion. It targets only the MLP fc1/fc2 layers of all
+# 50 blocks, which exist in both the FL2VA and Ref2VA diffusion models.
+MOTION_LORAS = {
+    "hmmotion": (MOTION_LORA_NAME, 1.0, "Load hmmotion LoRA"),
+    "m3_unlocked": ("M3_Unlocked_V2.safetensors", 1.0, "Load M3 Unlocked LoRA"),
+}
+DEFAULT_MOTION_LORA_VARIANT = "hmmotion"
 TURBO_LORA_NAME = "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
-# Settings recommended alongside the hmmotion LoRA.
-MOTION_LORA_STRENGTH = 1.0
 TURBO_LORA_STRENGTH = 0.5
+# Sampler settings recommended alongside the hmmotion LoRA.
 MOTION_SAMPLER = "euler"
 MOTION_STEPS = 12
 MOTION_SHIFT_VIDEO = 6.0
@@ -43,6 +51,7 @@ def apply_motion_loras(
     scheduler_node_id: str,
     motion_lora: bool = True,
     turbo_lora: bool = True,
+    motion_lora_variant: str = DEFAULT_MOTION_LORA_VARIANT,
 ) -> dict:
     """Splice the requested LoRAs and a sigma shift between the UNet and the nodes
     that consume it, then switch the sampler to the accelerated settings.
@@ -50,22 +59,26 @@ def apply_motion_loras(
     The sampler settings are deliberately identical for every combination. The
     euler / 12 step / shift 6 figures come from the hmmotion recommendation, and
     holding them constant means switching a LoRA on or off changes only which
-    weights are loaded, so the comparison isolates the LoRA. Both LoRAs are
-    model-only, so the CLIP path is untouched.
+    weights are loaded, so the comparison isolates the LoRA. That holds across
+    motion variants too. Every LoRA here is model-only, so the CLIP path is
+    untouched.
     """
     if not motion_lora and not turbo_lora:
         return workflow
+    if motion_lora and motion_lora_variant not in MOTION_LORAS:
+        raise ValueError(f"Unknown motion LoRA: {motion_lora_variant}")
 
     source = [unet_node_id, 0]
     if motion_lora:
+        lora_name, strength, title = MOTION_LORAS[motion_lora_variant]
         workflow[_LORA_MOTION_NODE] = {
             "inputs": {
                 "model": source,
-                "lora_name": MOTION_LORA_NAME,
-                "strength_model": MOTION_LORA_STRENGTH,
+                "lora_name": lora_name,
+                "strength_model": strength,
             },
             "class_type": "LoraLoaderModelOnly",
-            "_meta": {"title": "Load hmmotion LoRA"},
+            "_meta": {"title": title},
         }
         source = [_LORA_MOTION_NODE, 0]
     if turbo_lora:
@@ -115,6 +128,7 @@ def build_minimax_h3_workflow(
     last_frame_name: Optional[str] = None,
     motion_lora: bool = False,
     turbo_lora: bool = False,
+    motion_lora_variant: str = DEFAULT_MOTION_LORA_VARIANT,
 ) -> dict:
     try:
         width, height = RESOLUTIONS[(aspect_ratio, megapixels)]
@@ -260,7 +274,14 @@ def build_minimax_h3_workflow(
         workflow["105:104"]["inputs"]["last_frame"] = ["115", 0]
 
     apply_motion_loras(
-        workflow, "105:6", ["105:16", "105:9"], "105:17", "105:9", motion_lora, turbo_lora
+        workflow,
+        "105:6",
+        ["105:16", "105:9"],
+        "105:17",
+        "105:9",
+        motion_lora,
+        turbo_lora,
+        motion_lora_variant,
     )
 
     return workflow
@@ -276,6 +297,7 @@ def build_minimax_h3_reference_workflow(
     reference_audio_names: Sequence[str] = (),
     motion_lora: bool = False,
     turbo_lora: bool = False,
+    motion_lora_variant: str = DEFAULT_MOTION_LORA_VARIANT,
 ) -> dict:
     """Build the official MiniMax H3 Ref2VA image-reference graph."""
     if not 1 <= len(reference_image_names) <= 9:
@@ -435,7 +457,14 @@ def build_minimax_h3_reference_workflow(
         workflow["136"]["inputs"][f"ref_audios.ref_audio_{index}"] = [node_id, 0]
 
     apply_motion_loras(
-        workflow, "127", ["126", "124"], "123", "124", motion_lora, turbo_lora
+        workflow,
+        "127",
+        ["126", "124"],
+        "123",
+        "124",
+        motion_lora,
+        turbo_lora,
+        motion_lora_variant,
     )
 
     return workflow
@@ -525,6 +554,7 @@ class ComfyUIVideoClient:
         reference_audios: Optional[Sequence[tuple[bytes, str, str]]] = None,
         motion_lora: bool = False,
         turbo_lora: bool = False,
+        motion_lora_variant: str = DEFAULT_MOTION_LORA_VARIANT,
     ) -> tuple[bytes, str, str]:
         first_frame_name = await self.upload_image(*first_frame) if first_frame else None
         last_frame_name = await self.upload_image(*last_frame) if last_frame else None
@@ -549,6 +579,7 @@ class ComfyUIVideoClient:
                 reference_audio_names,
                 motion_lora,
                 turbo_lora,
+                motion_lora_variant=motion_lora_variant,
             )
         else:
             workflow = build_minimax_h3_workflow(
@@ -561,6 +592,7 @@ class ComfyUIVideoClient:
                 last_frame_name,
                 motion_lora,
                 turbo_lora,
+                motion_lora_variant=motion_lora_variant,
             )
         response = await self._request(
             "POST",

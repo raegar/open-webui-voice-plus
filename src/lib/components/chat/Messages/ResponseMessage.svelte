@@ -279,13 +279,20 @@
 
 		// Characters make the scene a Ref2VA generation. File ids travel rather than
 		// data URLs: sessionStorage would blow its quota on a few base64 images.
-		let characters = [];
+		let characters: {
+			name: string;
+			description: string;
+			imageFileIds: string[];
+			voiceFileId: string;
+			kind: string;
+			outfit?: string;
+			outfitDescription?: string;
+			appliesTo?: string;
+			state: string;
+		}[] = [];
 		if (chatId) {
 			try {
 				const attached = await getChatVideoCharacters(localStorage.token, chatId);
-				// An outfit names the character it belongs to, so resolve the id here where
-				// the whole roster is in hand rather than shipping ids the studio cannot read.
-				const nameById = new Map(attached.map((c) => [c.id, c.name]));
 				characters = attached
 					.filter((character) => (character?.image_file_ids ?? []).length > 0)
 					.map((character) => ({
@@ -294,9 +301,33 @@
 						imageFileIds: character.image_file_ids,
 						voiceFileId: character.voice_file_id ?? '',
 						kind: character.kind ?? 'character',
-						appliesTo: nameById.get(character.applies_to_id ?? '') ?? '',
+						outfit: character.outfit?.name ?? '',
+						// Only needed when the outfit has no images and so no wardrobe entry.
+						outfitDescription: character.outfit?.description ?? '',
 						state: character.state ?? ''
 					}));
+				// Outfits ride on the characters wearing them. One outfit shared by several
+				// characters becomes a single wardrobe entry naming all of its wearers, so
+				// its images are sent once.
+				const wearers = new Map();
+				for (const character of attached) {
+					const outfit = character.outfit;
+					if (!outfit || outfit.image_file_ids.length === 0) continue;
+					const entry = wearers.get(outfit.id) ?? { outfit, names: [] };
+					entry.names.push(character.name);
+					wearers.set(outfit.id, entry);
+				}
+				for (const { outfit, names } of wearers.values()) {
+					characters.push({
+						name: outfit.name,
+						description: outfit.description,
+						imageFileIds: outfit.image_file_ids,
+						voiceFileId: '',
+						kind: 'outfit',
+						appliesTo: names.join(' and '),
+						state: ''
+					});
+				}
 			} catch (error) {
 				// A roster lookup failure must not block the scene; fall back to text-to-video.
 				console.error(error);

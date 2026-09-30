@@ -6,11 +6,16 @@ export type VideoGenerationOptions = {
 	megapixels: 0.2 | 0.4;
 	duration: 3 | 5 | 10 | 15;
 	seed?: number | string;
+	// Filming style id the brief was drafted with; recorded on the video.
+	style?: string;
+	// Whose eyes a point-of-view style films from.
+	pov_subject?: string;
 	first_frame_data_url?: string;
 	last_frame_data_url?: string;
 	reference_image_data_urls?: string[];
 	reference_audio_data_urls?: string[];
 	motion_lora?: boolean;
+	motion_lora_variant?: 'hmmotion' | 'm3_unlocked';
 	turbo_lora?: boolean;
 };
 
@@ -34,9 +39,10 @@ const videoApiError = (err: any) =>
 		? err.detail.map((item: { msg?: string }) => item.msg ?? JSON.stringify(item)).join(', ')
 		: (err?.detail ?? 'Server connection failed');
 
-export const getVideoHistory = async (token: string, limit: number = 50) => {
+export const getVideoHistory = async (token: string, limit: number = 50, chatId?: string) => {
 	let error: string | null = null;
 	const searchParams = new URLSearchParams({ limit: String(limit) });
+	if (chatId) searchParams.set('chat_id', chatId);
 	const res = await fetch(`${VIDEOS_API_BASE_URL}/history?${searchParams.toString()}`, {
 		method: 'GET',
 		headers: {
@@ -214,8 +220,22 @@ export type VideoCharacter = {
 	voice_file_id: string;
 	kind: ReferenceKind;
 	applies_to_id: string;
+	/** Hidden while work mode (the hidePrivate setting) is on. */
+	private: boolean;
+	/** Unix seconds. */
+	created_at: number;
+	updated_at: number;
 	/** Per-chat state of dress; only present from getChatVideoCharacters. */
 	state?: string;
+	/** Library outfit worn in this chat; only present from getChatVideoCharacters. */
+	outfit?: VideoOutfit | null;
+};
+
+export type VideoOutfit = {
+	id: string;
+	name: string;
+	description: string;
+	image_file_ids: string[];
 };
 
 const videoCharacterRequest = async (token: string, path: string, init: RequestInit = {}) => {
@@ -261,6 +281,7 @@ export const createVideoCharacter = async (
 		voice_file_id?: string;
 		kind?: ReferenceKind;
 		applies_to_id?: string;
+		private?: boolean;
 	}
 ): Promise<VideoCharacter> =>
 	await videoCharacterRequest(token, '/characters', {
@@ -278,6 +299,7 @@ export const updateVideoCharacter = async (
 		voice_file_id?: string;
 		kind?: ReferenceKind;
 		applies_to_id?: string;
+		private?: boolean;
 	}
 ): Promise<VideoCharacter> =>
 	await videoCharacterRequest(token, `/characters/${id}`, {
@@ -305,6 +327,19 @@ export const setVideoCharacterState = async (
 		token,
 		`/characters/chat/${encodeURIComponent(chatId)}/state/${characterId}`,
 		{ method: 'POST', body: JSON.stringify({ state }) }
+	);
+
+/** Dress an attached character in a library outfit for this chat; '' clears it. */
+export const setVideoCharacterOutfit = async (
+	token: string,
+	chatId: string,
+	characterId: string,
+	outfitId: string
+) =>
+	await videoCharacterRequest(
+		token,
+		`/characters/chat/${encodeURIComponent(chatId)}/outfit/${characterId}`,
+		{ method: 'POST', body: JSON.stringify({ outfit_id: outfitId }) }
 	);
 
 export const detachVideoCharacter = async (token: string, chatId: string, characterId: string) =>

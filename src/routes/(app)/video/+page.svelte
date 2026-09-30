@@ -22,6 +22,14 @@
 	import { config, mobile, models, settings, showSidebar, user, WEBUI_NAME } from '$lib/stores';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 	import { updateUserSettings } from '$lib/apis/users';
+	import {
+		DEFAULT_VIDEO_STYLE,
+		VIDEO_STYLES,
+		getVideoStyle,
+		isVideoStyleId,
+		videoStyleDirection,
+		type VideoStyleId
+	} from '$lib/utils/videoStyles';
 
 	type WorkflowMode = 'text' | 'first' | 'first-last' | 'reference';
 	type FrameRole = 'first' | 'last';
@@ -50,12 +58,35 @@
 		duration: number;
 		aspect_ratio: string;
 		seed: string | number;
+		style?: string;
+		pov_subject?: string;
+		/** Render time in seconds; absent on clips made before it was recorded. */
+		generation_seconds?: number | null;
 		megapixels?: number;
 		has_first_frame?: boolean;
 		has_last_frame?: boolean;
 		reference_image_count?: number;
 		created_at?: number;
 	};
+
+	// "1m 05s" for anything past a minute, "42s" below it.
+	const formatRenderTime = (seconds: number) => {
+		const total = Math.round(seconds);
+		if (total < 60) return `${total}s`;
+		return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`;
+	};
+	const videoMetaLine = (video: GeneratedVideo) =>
+		[
+			`${video.duration}s`,
+			video.aspect_ratio,
+			`seed ${video.seed}`,
+			getVideoStyle(video.style).label,
+			typeof video.generation_seconds === 'number'
+				? `rendered in ${formatRenderTime(video.generation_seconds)}`
+				: ''
+		]
+			.filter(Boolean)
+			.join(' | ');
 
 	const TIMELINE_PROMPT_SYSTEM = `You are a professional prompt engineer for MiniMax H3 image/text-to-video with synchronized audio. Turn the user's scenario into a concise, vivid production prompt and output ONLY that prompt.
 
@@ -110,10 +141,28 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 	// res_multistep one, so returning to it needs no rebuild. Turbo defaults on: it
 	// is the speed win and has tested clean. Sampler settings are the same for every
 	// combination, so toggling one changes only which weights load.
-	let motionLora = false;
+	// Motion slot: off, or one of the interchangeable motion LoRAs.
+	let motionLoraChoice: 'off' | 'hmmotion' | 'm3_unlocked' = 'off';
+	$: motionLora = motionLoraChoice !== 'off';
 	let turboLora = true;
 	let duration: Duration = 10;
 	let seed: string | number | null = '';
+	let videoStyle: VideoStyleId = DEFAULT_VIDEO_STYLE;
+	// The style the brief on screen was drafted with, or null for one written by hand.
+	// A style only reaches the video through drafting, so a mismatch means a redraft.
+	let draftedStyle: VideoStyleId | null = null;
+	// Whose eyes a POV style films from: a cast member, someone typed in, or '' to let
+	// the prompt model pick. Only meaningful while a POV style is selected.
+	const POV_OTHER = '__other__';
+	let povChoice = '';
+	let povOther = '';
+	let draftedPov = '';
+	$: povStyleSelected = !!getVideoStyle(videoStyle).pov;
+	$: povSubject = povStyleSelected ? (povChoice === POV_OTHER ? povOther.trim() : povChoice) : '';
+	$: styleNeedsRedraft =
+		productionPrompt.trim() !== '' && (draftedStyle ?? DEFAULT_VIDEO_STYLE) !== videoStyle;
+	$: povNeedsRedraft =
+		productionPrompt.trim() !== '' && !styleNeedsRedraft && draftedPov !== povSubject;
 	let firstFrame: FrameAsset | null = null;
 	let lastFrame: FrameAsset | null = null;
 	let referenceImages: FrameAsset[] = [];
@@ -143,6 +192,8 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 	let sceneContext: string | null = null;
 	let sceneChatId: string | null = null;
 	let sceneCharacters: string | null = null;
+	// Names of the people in the handed-over cast, for the POV subject picker.
+	let sceneCastNames: string[] = [];
 	// Voice reference data URLs, in the same order as the <Audio N> labels.
 	let sceneVoices: string[] = [];
 	let capturingFrame = false;
@@ -480,8 +531,8 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 			lastFrame = null;
 			continuationSource = source;
 			promptApproved = false;
-			// A continuation is a new shot, so let the backend pick a fresh seed.
-			seed = '';
+			// A continuation is a new shot, so it gets a fresh seed when submitted.
+			setSeed('');
 			if (['16:9', '9:16', '1:1'].includes(source.aspect_ratio)) {
 				aspectRatio = source.aspect_ratio as AspectRatio;
 			}
@@ -561,15 +612,23 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 			voiceFileId?: string;
 			kind?: string;
 			appliesTo?: string;
+			outfit?: string;
+			outfitDescription?: string;
 			state?: string;
 		}[]
-	): Promise<{ images: FrameAsset[]; voices: string[]; summary: string | null }> => {
+	): Promise<{
+		images: FrameAsset[];
+		voices: string[];
+		castNames: string[];
+		summary: string | null;
+	}> => {
 		const images: FrameAsset[] = [];
 		const voices: string[] = [];
 		// Built with an explicit constant rather than an inline escape: this file has
 		// been bitten twice by escaping in edit tooling.
 		const NL = '\n';
 		const cast: string[] = [];
+		const castNames: string[] = [];
 		const settingRefs: string[] = [];
 		const wardrobe: string[] = [];
 
@@ -619,13 +678,22 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 						console.error(error);
 					}
 				}
-				// Present state overrides the library description, which is only their
-				// default look; a scene should show what they are wearing right now.
+				// Clothing is layered: a chosen outfit replaces the clothing in the library
+				// description, and present state overrides both, since it records what has
+				// changed during the scene.
+				const outfit = entry?.outfit?.trim();
+				const inWardrobe =
+					!!outfit && roster.some((e) => e?.kind === 'outfit' && e?.name?.trim() === outfit);
+				const outfitDetail = entry?.outfitDescription?.trim();
+				const outfitLine = outfit
+					? ` They are wearing ${outfit}${inWardrobe ? ' (see WARDROBE)' : outfitDetail ? `: ${outfitDetail}` : ''} — this replaces any clothing in the description.`
+					: '';
 				const state = entry?.state?.trim();
 				const stateLine = state
-					? ` Right now they are: ${state} — this overrides any clothing in the description.`
+					? ` Right now they are: ${state} — this overrides any clothing in the description${outfit ? ' and the outfit' : ''}.`
 					: '';
-				cast.push(`${name} — ${pictures}.${audioLabel} ${description}${stateLine}`);
+				cast.push(`${name} — ${pictures}.${audioLabel} ${description}${outfitLine}${stateLine}`);
+				if (entry?.name?.trim()) castNames.push(entry.name.trim());
 			}
 		}
 
@@ -636,6 +704,7 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 		return {
 			images,
 			voices,
+			castNames: [...new Set(castNames)],
 			summary: sections.length ? sections.join(NL + NL) : null
 		};
 	};
@@ -717,11 +786,13 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 				referenceImages = loaded.images;
 				sceneVoices = loaded.voices ?? [];
 				sceneCharacters = loaded.summary;
+				sceneCastNames = loaded.castNames;
 			} else {
 				// No usable references: fall back to the plain text-to-video path.
 				selectMode('text');
 				sceneVoices = [];
 				sceneCharacters = null;
+				sceneCastNames = [];
 			}
 			return true;
 		} catch {
@@ -735,6 +806,10 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 		sceneChatId = null;
 		sceneCharacters = null;
 		sceneVoices = [];
+		// A cast member chosen as the POV subject stays chosen, as typed-in text.
+		const pov = povChoice === POV_OTHER ? povOther : povChoice;
+		sceneCastNames = [];
+		setPovSubject(pov);
 	};
 
 	const draftPrompt = async () => {
@@ -748,6 +823,10 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 		}
 		drafting = true;
 		promptApproved = false;
+		// Captured now, so changing the dropdown mid-draft cannot mislabel the result.
+		const styleForDraft = videoStyle;
+		const povForDraft = povSubject;
+		const styleSection = videoStyleDirection(styleForDraft, { povSubject: povForDraft });
 		try {
 			const response = await generateOpenAIChatCompletion(localStorage.token, {
 				model: selectedModelId,
@@ -768,7 +847,13 @@ Hard constraints:
 - Workflow: ${workflowLabel()}
 - Spoken words: ${speechBudget(duration)} at most, counted across every <d> tag combined
 - Shots containing dialogue: ${dialogueShotBudget(duration)} at most
-
+${
+	styleSection
+		? `
+${styleSection}
+`
+		: ''
+}
 Frame metadata only (the image pixels are intentionally unavailable to you):
 ${frameMetadata()}
 ${
@@ -838,6 +923,8 @@ Write the final MiniMax H3 production brief now.`
 				}
 			}
 			productionPrompt = draft;
+			draftedStyle = styleForDraft;
+			draftedPov = povForDraft;
 			if (avoidedLeft.length) {
 				toast.warning(
 					`The draft still mentions ${describeLooks(avoidedLeft)}. The video model renders these badly - edit them out before approving.`
@@ -943,6 +1030,109 @@ Write the final MiniMax H3 production brief now.`
 		else localStorage.removeItem(activeJobStorageKey());
 	};
 
+	// Each chat keeps its own seed, so leaving for another chat and coming back picks up
+	// where it was. An empty string is stored too: a seed cleared for random stays cleared.
+	const chatSeedStorageKey = (chatId: string) =>
+		`owui-video-seed:${$user?.id ?? 'default'}:${chatId}`;
+
+	const setSeed = (value: string | number | null) => {
+		seed = value;
+		if (!sceneChatId) return;
+		const text = value === null || value === undefined ? '' : String(value).trim();
+		try {
+			localStorage.setItem(chatSeedStorageKey(sceneChatId), text);
+		} catch {
+			// Storage can be unavailable (private mode); the seed still applies this visit.
+		}
+	};
+
+	// This browser's last word on the chat's seed wins, including a clear. Without one
+	// (another device, cleared storage), fall back to the chat's most recent video.
+	const restoreChatSeed = async (chatId: string) => {
+		let stored: string | null = null;
+		try {
+			stored = localStorage.getItem(chatSeedStorageKey(chatId));
+		} catch {
+			stored = null;
+		}
+		if (stored !== null) {
+			seed = stored;
+			return;
+		}
+		try {
+			const [latest]: GeneratedVideo[] = await getVideoHistory(localStorage.token, 1, chatId);
+			if (latest?.seed !== undefined && latest.seed !== '') setSeed(String(latest.seed));
+		} catch (error) {
+			console.error(error);
+		}
+	};
+
+	// The chat's filming style follows the seed's rules: it is remembered when a video is
+	// generated, this browser's last word wins, and otherwise the chat's latest video
+	// says which style it was made with.
+	const chatStyleStorageKey = (chatId: string) =>
+		`owui-video-style:${$user?.id ?? 'default'}:${chatId}`;
+
+	// The POV subject rides along with the style, including '' for "let the model pick".
+	const chatPovStorageKey = (chatId: string) =>
+		`owui-video-pov:${$user?.id ?? 'default'}:${chatId}`;
+
+	const rememberChatStyle = (chatId: string | undefined, style: VideoStyleId, pov: string) => {
+		if (!chatId) return;
+		try {
+			localStorage.setItem(chatStyleStorageKey(chatId), style);
+			localStorage.setItem(chatPovStorageKey(chatId), pov);
+		} catch {
+			// Storage can be unavailable (private mode); history still records the style.
+		}
+	};
+
+	// A cast member is picked from the list; anyone else goes in the free-text box.
+	const setPovSubject = (value: string | null | undefined) => {
+		const name = (value ?? '').trim();
+		if (!name) {
+			povChoice = '';
+			povOther = '';
+		} else if (sceneCastNames.includes(name)) {
+			povChoice = name;
+			povOther = '';
+		} else {
+			povChoice = POV_OTHER;
+			povOther = name;
+		}
+	};
+
+	const restoreChatStyle = async (chatId: string) => {
+		let storedStyle: string | null = null;
+		let storedPov: string | null = null;
+		try {
+			storedStyle = localStorage.getItem(chatStyleStorageKey(chatId));
+			storedPov = localStorage.getItem(chatPovStorageKey(chatId));
+		} catch {
+			storedStyle = null;
+			storedPov = null;
+		}
+		if (isVideoStyleId(storedStyle)) videoStyle = storedStyle;
+		if (storedPov !== null) setPovSubject(storedPov);
+		if (isVideoStyleId(storedStyle) && storedPov !== null) return;
+		try {
+			const [latest]: GeneratedVideo[] = await getVideoHistory(localStorage.token, 1, chatId);
+			if (!isVideoStyleId(storedStyle) && isVideoStyleId(latest?.style)) {
+				videoStyle = latest.style;
+			}
+			if (storedPov === null && latest) setPovSubject(latest.pov_subject);
+		} catch (error) {
+			console.error(error);
+		}
+	};
+
+	// Matches the backend's range for a seed it picks itself (2^53 - 1).
+	const randomSeed = () => {
+		const words = new Uint32Array(2);
+		crypto.getRandomValues(words);
+		return String((words[0] & 0x1fffff) * 2 ** 32 + words[1]);
+	};
+
 	const untrackJob = (jobId: string) => {
 		trackedJobIds = trackedJobIds.filter((id) => id !== jobId);
 		writeTrackedJobs(trackedJobIds);
@@ -1007,9 +1197,8 @@ Write the final MiniMax H3 production brief now.`
 							currentVideo = result;
 							// It may already be a history card if it finished before this page loaded.
 							videoHistory = videoHistory.filter((item) => item.url !== result.url);
-							// The seed field is not filled from the finished job. With a queue it is often
-							// holding the next submission's settings, and filling it made "queue again" silently
-							// reuse this seed and render the same clip. "Use prompt" on a card restores a seed.
+							// The seed field is not filled here: it was filled when this job was
+							// submitted, and refilling it now would undo a clear made while it rendered.
 							toast.success('MiniMax H3 video completed.');
 						} else {
 							toast.error('A completed generation returned no video.');
@@ -1072,11 +1261,10 @@ Write the final MiniMax H3 production brief now.`
 		}
 		// An empty seed input binds to null, not ''. Treat both as "pick a fresh random seed".
 		const seedText = seed === null || seed === undefined ? '' : String(seed).trim();
-		const parsedSeed = seedText === '' ? undefined : seedText;
-		if (
-			parsedSeed !== undefined &&
-			(!/^\d+$/.test(parsedSeed) || BigInt(parsedSeed) > 9223372036854775807n)
-		) {
+		// Pick the random seed here rather than on the server, so it can go straight into
+		// the field and the chat's next generation reuses it until cleared.
+		const parsedSeed = seedText === '' ? randomSeed() : seedText;
+		if (!/^\d+$/.test(parsedSeed) || BigInt(parsedSeed) > 9223372036854775807n) {
 			toast.error('Seed must be a non-negative whole number.');
 			return;
 		}
@@ -1102,11 +1290,14 @@ Write the final MiniMax H3 production brief now.`
 			options = {
 				mode: workflowMode === 'reference' ? 'reference' : 'text',
 				motion_lora: motionLora,
+				...(motionLoraChoice !== 'off' ? { motion_lora_variant: motionLoraChoice } : {}),
 				turbo_lora: turboLora,
 				aspect_ratio: aspectRatio,
 				megapixels,
 				duration,
-				...(parsedSeed !== undefined ? { seed: parsedSeed } : {}),
+				seed: parsedSeed,
+				style: videoStyle,
+				...(povSubject ? { pov_subject: povSubject } : {}),
 				...(workflowMode !== 'text' && firstFrame
 					? { first_frame_data_url: firstFrame.dataUrl }
 					: {}),
@@ -1128,6 +1319,10 @@ Write the final MiniMax H3 production brief now.`
 		// may still have been accepted, and the poller will find it.
 		trackedJobIds = [...trackedJobIds, jobId];
 		writeTrackedJobs(trackedJobIds);
+		// Tag the video with its chat, so the chat can find its latest seed on another device.
+		const submittedChatId = sceneChatId ?? undefined;
+		const submittedStyle = videoStyle;
+		const submittedPov = povSubject;
 		submitting = true;
 		try {
 			let accepted: VideoGenerationJob | null = null;
@@ -1136,7 +1331,8 @@ Write the final MiniMax H3 production brief now.`
 					localStorage.token,
 					jobId,
 					outboundPrompt,
-					options
+					options,
+					submittedChatId
 				);
 			} catch (error) {
 				if (!String(error).includes('Server connection failed')) {
@@ -1152,7 +1348,8 @@ Write the final MiniMax H3 production brief now.`
 						localStorage.token,
 						jobId,
 						outboundPrompt,
-						options
+						options,
+						submittedChatId
 					);
 				} catch (retryError) {
 					if (!String(retryError).includes('Server connection failed')) {
@@ -1165,6 +1362,10 @@ Write the final MiniMax H3 production brief now.`
 			const ahead = accepted?.position ?? 0;
 			approvedSubmissions += 1;
 			lastSubmittedAt = Date.now();
+			// Show the seed this job uses; the chat's next generation reuses it until cleared.
+			setSeed(parsedSeed);
+			// The chat's next generation starts from this style until it is changed.
+			rememberChatStyle(submittedChatId, submittedStyle, submittedPov);
 			toast.success(
 				ahead > 0
 					? `Queued with ${ahead} generation${ahead === 1 ? '' : 's'} ahead of it.`
@@ -1213,7 +1414,12 @@ Write the final MiniMax H3 production brief now.`
 		if ([3, 5, 10, 15].includes(video.duration)) {
 			duration = video.duration;
 		}
-		seed = video.seed;
+		setSeed(video.seed);
+		// The loaded brief was drafted in this style, so show it rather than flag a redraft.
+		videoStyle = getVideoStyle(video.style).id;
+		draftedStyle = videoStyle;
+		setPovSubject(video.pov_subject);
+		draftedPov = getVideoStyle(videoStyle).pov ? (video.pov_subject ?? '').trim() : '';
 		toast.success(
 			mode === 'text'
 				? 'Prompt and settings loaded for review.'
@@ -1290,6 +1496,8 @@ Write the final MiniMax H3 production brief now.`
 		lastPersistedModel = selectedModelId;
 		loaded = true;
 		const handoff = await consumeSceneHandoff();
+		if (sceneChatId)
+			await Promise.all([restoreChatSeed(sceneChatId), restoreChatStyle(sceneChatId)]);
 		await loadVideoHistory();
 		// Merge what this browser was following with what the server still has, so a
 		// generation queued from a phone shows up here too.
@@ -1306,8 +1514,10 @@ Write the final MiniMax H3 production brief now.`
 		if (trackedJobIds.length) {
 			void pollQueue(true);
 		}
-		// Draft after history so the studio is usable while the model is thinking.
-		if (handoff) void draftPrompt();
+		// Off by default: drafting costs a model call, so the scene waits for "Draft H3
+		// prompt" unless the user opted in under Settings > Interface. When on, draft after
+		// history so the studio is usable while the model is thinking.
+		if (handoff && $settings?.autoDraftVideoPrompt === true) void draftPrompt();
 	});
 	onDestroy(() => {
 		destroyed = true;
@@ -1598,7 +1808,7 @@ Write the final MiniMax H3 production brief now.`
 								<button
 									class="font-normal text-gray-500 hover:underline disabled:opacity-40"
 									disabled={seed === null || seed === ''}
-									on:click={() => (seed = '')}
+									on:click={() => setSeed('')}
 								>
 									Clear for random
 								</button>
@@ -1611,10 +1821,88 @@ Write the final MiniMax H3 production brief now.`
 								step="1"
 								placeholder="Random"
 								bind:value={seed}
+								on:input={() => setSeed(seed)}
 							/>
 							<p class="mt-1.5 text-xs text-gray-500">
-								Leave this blank to let each generation pick a new random seed.
+								Each generation fills this in, and this chat reuses it until you clear it for a new
+								random seed.
 							</p>
+						</div>
+
+						<div class="sm:col-span-2 lg:col-span-4">
+							<label class="mb-1.5 block text-xs font-medium" for="video-style">Filming style</label
+							>
+							<div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+								<select
+									id="video-style"
+									class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700 sm:max-w-xs"
+									bind:value={videoStyle}
+									on:change={markPromptForReview}
+								>
+									{#each VIDEO_STYLES as style (style.id)}
+										<option value={style.id}>{style.label}</option>
+									{/each}
+								</select>
+								<p class="text-xs text-gray-500">{getVideoStyle(videoStyle).summary}</p>
+							</div>
+							{#if styleNeedsRedraft}
+								<p class="mt-1.5 text-xs text-amber-700 dark:text-amber-300">
+									{draftedStyle === null
+										? 'The prompt below was not drafted here, so it has no style applied.'
+										: `The prompt below was drafted as ${getVideoStyle(draftedStyle).label}.`}
+									Redraft it to apply {getVideoStyle(videoStyle).label}.
+								</p>
+							{:else if povNeedsRedraft}
+								<p class="mt-1.5 text-xs text-amber-700 dark:text-amber-300">
+									{draftedPov
+										? `The prompt below is filmed from ${draftedPov}’s point of view.`
+										: 'The prompt below lets the prompt model choose whose point of view it is.'}
+									Redraft it to {povSubject
+										? `film it from ${povSubject}’s.`
+										: 'let the prompt model choose.'}
+								</p>
+							{:else}
+								<p class="mt-1.5 text-xs text-gray-500">
+									Applied when the prompt is drafted.{sceneChatId
+										? ' This chat keeps the style of its last generation until you change it.'
+										: ''}
+								</p>
+							{/if}
+							{#if povStyleSelected}
+								<div class="mt-3 flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-3">
+									<div class="w-full sm:max-w-xs">
+										<label class="mb-1.5 block text-xs font-medium" for="video-pov-subject">
+											Whose glasses?
+										</label>
+										<select
+											id="video-pov-subject"
+											class="w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
+											bind:value={povChoice}
+											on:change={markPromptForReview}
+										>
+											<option value="">Let the prompt model choose</option>
+											{#each sceneCastNames as name (name)}
+												<option value={name}>{name}</option>
+											{/each}
+											<option value={POV_OTHER}>Someone else…</option>
+										</select>
+										{#if povChoice === POV_OTHER}
+											<input
+												class="mt-1.5 w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
+												type="text"
+												maxlength="200"
+												placeholder="A name, or who they are in the scene"
+												bind:value={povOther}
+												on:input={markPromptForReview}
+											/>
+										{/if}
+									</div>
+									<p class="text-xs text-gray-500 sm:mt-7">
+										The draft films from this person’s eyes and leaves out everything they could not
+										see of themselves: only their hands, and a reflection in a mirror, can appear.
+									</p>
+								</div>
+							{/if}
 						</div>
 
 						<div class="sm:col-span-2 lg:col-span-4 space-y-2">
@@ -1629,17 +1917,44 @@ Write the final MiniMax H3 production brief now.`
 									<span class="block text-gray-500">Speed. Strength 0.5.</span>
 								</span>
 							</label>
-							<label class="flex items-start gap-2 text-xs">
-								<input
-									type="checkbox"
-									class="mt-0.5 size-3.5 accent-gray-700"
-									bind:checked={motionLora}
-								/>
-								<span>
-									<span class="font-medium">Motion LoRA (hmmotion)</span>
-									<span class="block text-gray-500">More motion. Strength 1.0.</span>
+							<fieldset class="text-xs">
+								<legend class="font-medium">Motion LoRA</legend>
+								<div class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+									<label class="flex items-center gap-1.5">
+										<input
+											type="radio"
+											name="motion-lora"
+											value="off"
+											class="size-3.5 accent-gray-700"
+											bind:group={motionLoraChoice}
+										/>
+										Off
+									</label>
+									<label class="flex items-center gap-1.5">
+										<input
+											type="radio"
+											name="motion-lora"
+											value="hmmotion"
+											class="size-3.5 accent-gray-700"
+											bind:group={motionLoraChoice}
+										/>
+										hmmotion
+									</label>
+									<label class="flex items-center gap-1.5">
+										<input
+											type="radio"
+											name="motion-lora"
+											value="m3_unlocked"
+											class="size-3.5 accent-gray-700"
+											bind:group={motionLoraChoice}
+										/>
+										M3 Unlocked V2
+									</label>
+								</div>
+								<span class="mt-0.5 block text-gray-500">
+									More motion. One at a time, strength 1.0.
 								</span>
-							</label>
+							</fieldset>
 							<p class="text-[11px] text-gray-500">
 								{motionLora || turboLora
 									? 'euler / 12 steps / shift 6 — the same for every combination, so switching one changes only which weights load.'
@@ -1860,7 +2175,7 @@ Write the final MiniMax H3 production brief now.`
 							<video class="aspect-video w-full bg-black object-contain" src={video.url} controls
 							></video>
 							<div class="flex flex-wrap items-center gap-3 p-3 text-xs text-gray-500">
-								<span>{video.duration}s | {video.aspect_ratio} | seed {video.seed}</span>
+								<span>{videoMetaLine(video)}</span>
 								<div class="ml-auto flex shrink-0 gap-3">
 									<button
 										class="font-medium text-gray-800 hover:underline disabled:opacity-40 dark:text-gray-200"
@@ -1936,7 +2251,7 @@ Write the final MiniMax H3 production brief now.`
 									<div
 										class="flex flex-wrap items-center gap-x-3 gap-y-1 p-3 text-xs text-gray-500"
 									>
-										<span>{video.duration}s | {video.aspect_ratio} | seed {video.seed}</span>
+										<span>{videoMetaLine(video)}</span>
 										<span class="text-gray-400">{formatVideoDate(video.created_at)}</span>
 										<div class="ml-auto flex shrink-0 gap-3">
 											<button

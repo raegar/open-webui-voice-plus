@@ -2,6 +2,7 @@ import pytest
 
 from open_webui.utils.videos.comfyui import (
     MOTION_LORA_NAME,
+    MOTION_LORAS,
     TURBO_LORA_NAME,
     ComfyUIVideoClient,
     build_minimax_h3_reference_workflow,
@@ -327,3 +328,52 @@ def test_loras_apply_to_the_reference_workflow_too():
     assert workflow["124"]["inputs"]["model"] == ["903", 0]
     assert workflow["123"]["inputs"]["sampler_name"] == "euler"
     assert workflow["124"]["inputs"]["steps"] == 12
+
+
+def test_m3_unlocked_fills_the_motion_slot_instead_of_hmmotion():
+    workflow = build_minimax_h3_workflow(
+        "p",
+        "9:16",
+        0.2,
+        10,
+        1,
+        motion_lora=True,
+        turbo_lora=True,
+        motion_lora_variant="m3_unlocked",
+    )
+    assert _loras(workflow) == ["M3_Unlocked_V2.safetensors", TURBO_LORA_NAME]
+    assert workflow["901"]["inputs"]["model"] == ["105:6", 0]
+    assert workflow["902"]["inputs"]["model"] == ["901", 0]
+    assert workflow["901"]["inputs"]["strength_model"] == 1.0
+    # Same sampler as hmmotion, so swapping variants changes only the weights.
+    assert workflow["105:17"]["inputs"]["sampler_name"] == "euler"
+    assert workflow["105:9"]["inputs"]["steps"] == 12
+
+
+def test_m3_unlocked_applies_to_the_reference_workflow():
+    workflow = build_minimax_h3_reference_workflow(
+        "p", "9:16", 0.2, 10, 1, ["a.png"], motion_lora=True, motion_lora_variant="m3_unlocked"
+    )
+    assert _loras(workflow) == ["M3_Unlocked_V2.safetensors"]
+    assert workflow["126"]["inputs"]["model"] == ["903", 0]
+
+
+def test_variant_is_ignored_when_the_motion_lora_is_off():
+    workflow = build_minimax_h3_workflow(
+        "p", "9:16", 0.2, 10, 1, turbo_lora=True, motion_lora_variant="m3_unlocked"
+    )
+    assert _loras(workflow) == [TURBO_LORA_NAME]
+
+
+def test_default_variant_is_still_hmmotion():
+    workflow = build_minimax_h3_workflow("p", "9:16", 0.2, 10, 1, motion_lora=True)
+    assert _loras(workflow) == [MOTION_LORA_NAME]
+    assert MOTION_LORAS["hmmotion"][0] == MOTION_LORA_NAME
+
+
+def test_unknown_motion_variant_is_rejected():
+    with pytest.raises(ValueError):
+        build_minimax_h3_workflow(
+            "p", "9:16", 0.2, 10, 1, motion_lora=True, motion_lora_variant="nope"
+        )
+

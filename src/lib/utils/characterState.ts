@@ -22,10 +22,12 @@ Rules:
 - Include a character ONLY if the recent messages actually show their clothing changing: putting something on, taking something off, changing outfit, becoming dishevelled, getting wet, and so on.
 - If nothing about a character's clothing changed, omit them entirely. An empty object {} is the correct and common answer.
 - Never restate the default appearance as a change.
+- If a character changes clothes but the messages do not say what they changed into, or they change back into their default, reply with exactly "DEFAULT" for them. Do not guess an outfit.
+- Never bring back something a character wore earlier unless the recent messages explicitly say they put that item on again.
 - Never infer a change from mood, location, or dialogue alone.
 - Describe only clothing and state of dress. No personality, no actions, no plot.
 - Write the complete current state, not the delta: "barefoot in a red silk gown" rather than "took off shoes".
-- Keep each value under 200 characters.`;
+- Keep each value under 500 characters. When something changes about an outfit, keep naming its specific garments rather than shortening them to a vague label.`;
 
 /**
  * A workspace model carries its own system prompt, and the backend prepends it to
@@ -47,7 +49,29 @@ const trackerModel = (modelId: string): string => {
  */
 const nameKey = (name: string): string => name.trim().toLowerCase();
 
-type TrackedCharacter = { id: string; name: string; description: string; state: string };
+/**
+ * What "Currently wearing" says for a character dressed in a library outfit. The chat
+ * model follows the Currently line far more reliably than the outfit block above it,
+ * so the outfit is spelled out there in full rather than left to be inferred. Cut at
+ * a sentence end where possible, since the API caps state at MAX_STATE.
+ */
+export const outfitStateText = (outfit: { name: string; description: string }): string => {
+	const description = outfit.description.trim();
+	const full = description ? `${outfit.name.trim()}: ${description}` : outfit.name.trim();
+	if (full.length <= MAX_STATE) return full;
+	const cut = full.slice(0, MAX_STATE);
+	const sentenceEnd = cut.lastIndexOf('. ');
+	return sentenceEnd > MAX_STATE / 2 ? cut.slice(0, sentenceEnd + 1) : cut;
+};
+
+type TrackedCharacter = {
+	id: string;
+	name: string;
+	description: string;
+	state: string;
+	// What DEFAULT restores: the assigned outfit spelled out, or '' for their own clothes.
+	defaultState: string;
+};
 
 const asText = (content: unknown): string => {
 	if (typeof content === 'string') return content;
@@ -96,8 +120,13 @@ export const syncCharacterState = async (
 			.map((c) => ({
 				id: c.id,
 				name: c.name,
-				description: c.description ?? '',
-				state: c.state ?? ''
+				// A chosen outfit replaces the clothing in their description, so it is the
+				// baseline a change is measured from.
+				description: c.outfit
+					? `wearing ${c.outfit.name}${c.outfit.description ? `: ${c.outfit.description}` : ''}`
+					: (c.description ?? ''),
+				state: c.state ?? '',
+				defaultState: c.outfit ? outfitStateText(c.outfit) : ''
 			}));
 		if (tracked.length === 0) return { updated: [] };
 
@@ -145,8 +174,12 @@ export const syncCharacterState = async (
 			// Only a non-empty string that actually differs counts as a change, so a
 			// malformed reply or an unchanged character never clears what is recorded.
 			if (typeof next !== 'string') continue;
-			const value = next.trim().slice(0, MAX_STATE);
-			if (!value || value === character.state) continue;
+			let value = next.trim().slice(0, MAX_STATE);
+			if (!value) continue;
+			// Back in their default: the assigned outfit spelled out, or an empty record so
+			// their own clothes show through, never a guessed outfit.
+			if (value.replace(/["'.]/g, '').toUpperCase() === 'DEFAULT') value = character.defaultState;
+			if (value === character.state) continue;
 			await setVideoCharacterState(localStorage.token, chatId, character.id, value);
 			updated.push(character.name);
 		}

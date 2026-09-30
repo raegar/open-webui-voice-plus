@@ -7,6 +7,7 @@
 		detachVideoCharacter,
 		getChatVideoCharacters,
 		getVideoCharacterLibrary,
+		setVideoCharacterOutfit,
 		setVideoCharacterState,
 		type VideoCharacter
 	} from '$lib/apis/videos';
@@ -15,7 +16,7 @@
 	import { updateUserSettings } from '$lib/apis/users';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { createMessagesList } from '$lib/utils';
-	import { syncCharacterState } from '$lib/utils/characterState';
+	import { outfitStateText, syncCharacterState } from '$lib/utils/characterState';
 
 	const i18n: any = getContext('i18n');
 
@@ -38,20 +39,35 @@
 	// library entry, whose description is the character's default look.
 	let states: Record<string, string> = {};
 	let savingState: string | null = null;
+	// Per-chat outfit worn by each attached character, keyed by character id.
+	let outfitIds: Record<string, string> = {};
+	let savingOutfit: string | null = null;
 	let seenStateVersion = 0;
 	let refreshingStates = false;
 	$: autoTrack = ($settings as any)?.autoTrackCharacterState !== false;
+	const isOutfit = (c: VideoCharacter) => (c.kind ?? 'character') === 'outfit';
+	// Work mode leaves private characters out of the picker, attached or not.
+	$: visibleLibrary = $settings?.hidePrivate ? library.filter((c) => !c.private) : library;
+	// Outfits are not attached on their own; each character picks one to wear.
+	$: attachable = visibleLibrary.filter((c) => !isOutfit(c));
+	$: outfits = visibleLibrary.filter(isOutfit);
 
 	// Before the first message a chat has no id, so the selection is buffered in a
 	// store and flushed by initChatHandler the moment the chat is created.
 	$: selectedIds = chatId ? attachedIds : $pendingChatCharacterIds;
 	$: attached = library.filter((c) => selectedIds.includes(c.id));
-	$: usedImages = attached.reduce((sum, c) => sum + c.image_file_ids.length, 0);
+	// An outfit worn by several characters is one set of reference images.
+	$: wornOutfits = library.filter(
+		(o) => isOutfit(o) && attached.some((c) => outfitIds[c.id] === o.id)
+	);
 	$: usedVoices = attached.filter((c) => c.voice_file_id).length;
-	// Split the image budget so a location is not mistaken for cast headroom.
+	// Split the image budget so a location or outfit is not mistaken for cast headroom.
 	$: usedByPeople = attached
 		.filter((c) => (c.kind ?? 'character') === 'character')
 		.reduce((s, c) => s + c.image_file_ids.length, 0);
+	$: usedImages =
+		attached.reduce((sum, c) => sum + c.image_file_ids.length, 0) +
+		wornOutfits.reduce((sum, o) => sum + o.image_file_ids.length, 0);
 	$: usedByRefs = usedImages - usedByPeople;
 
 	const imageUrl = (fileId: string) => `${WEBUI_API_BASE_URL}/files/${fileId}/content`;
@@ -66,6 +82,7 @@
 			library = lib;
 			attachedIds = chatCharacters.map((c) => c.id);
 			states = Object.fromEntries(chatCharacters.map((c) => [c.id, c.state ?? '']));
+			outfitIds = Object.fromEntries(chatCharacters.map((c) => [c.id, c.outfit?.id ?? '']));
 		} catch (error) {
 			toast.error(`${error}`);
 		} finally {
@@ -132,6 +149,47 @@
 		}
 	};
 
+	const saveOutfit = async (characterId: string, select: HTMLSelectElement) => {
+		const outfitId = select.value;
+		// A refused or failed change puts the picker back on what is actually saved.
+		const revert = () => (select.value = outfitIds[characterId] ?? '');
+		if (!chatId || outfitId === (outfitIds[characterId] ?? '')) return;
+		const outfit = library.find((o) => o.id === outfitId);
+		// Images are counted once per outfit, so dressing a second character in an
+		// outfit already worn here costs nothing.
+		const alreadyWorn = wornOutfits.some((o) => o.id === outfitId);
+		if (
+			outfit &&
+			!alreadyWorn &&
+			usedImages + outfit.image_file_ids.length > MAX_REFERENCE_IMAGES
+		) {
+			toast.error($i18n.t('Reference video supports up to 9 images. Detach someone else first.'));
+			revert();
+			return;
+		}
+		savingOutfit = characterId;
+		try {
+			await setVideoCharacterOutfit(localStorage.token, chatId, characterId, outfitId);
+			outfitIds = { ...outfitIds, [characterId]: outfitId };
+			// A new outfit is a fresh start, written out in full: the chat model follows
+			// "Currently wearing" far more reliably than the outfit reference alone, and a
+			// note left from the old clothes would otherwise override the new ones.
+			// Back to their own clothes clears it so their description shows through.
+			const next = outfit ? outfitStateText(outfit) : '';
+			if (next !== (states[characterId] ?? '')) {
+				// The outfit is already saved, so a failure here must not revert the picker.
+				await setVideoCharacterState(localStorage.token, chatId, characterId, next)
+					.then(() => (states = { ...states, [characterId]: next }))
+					.catch((error) => toast.error(`${error}`));
+			}
+		} catch (error) {
+			toast.error(`${error}`);
+			revert();
+		} finally {
+			savingOutfit = null;
+		}
+	};
+
 	const toggle = async (character: VideoCharacter) => {
 		const isAttached = selectedIds.includes(character.id);
 
@@ -192,7 +250,7 @@
 			<a href="/characters" class="font-medium underline">{$i18n.t('Create one')}</a>
 		</div>
 	{:else}
-		{#each library as character (character.id)}
+		{#each attachable as character (character.id)}
 			{@const isAttached = selectedIds.includes(character.id)}
 			<button
 				class="flex items-center gap-2 rounded-lg border p-1.5 text-left transition {isAttached
@@ -231,14 +289,29 @@
 					</span>
 				{/if}
 			</button>
+			{#if isAttached && (character.kind ?? 'character') === 'character' && chatId && outfits.length > 0}
+				<select
+					class="-mt-1 w-full rounded-none border border-t-0 border-gray-100 bg-transparent px-1.5 py-1 text-[11px] outline-none focus:border-gray-400 dark:border-gray-850"
+					value={outfitIds[character.id] ?? ''}
+					disabled={savingOutfit === character.id}
+					on:change={(e) => saveOutfit(character.id, e.currentTarget)}
+				>
+					<option value="">{$i18n.t('Own clothes (from their description)')}</option>
+					{#each outfits as outfit (outfit.id)}
+						<option value={outfit.id}>{$i18n.t('Wearing')}: {outfit.name}</option>
+					{/each}
+				</select>
+			{/if}
 			{#if isAttached && (character.kind ?? 'character') === 'character'}
-				<input
-					class="-mt-1 w-full rounded-b-lg border border-t-0 border-gray-100 bg-transparent px-2 py-1 text-[11px] outline-none focus:border-gray-400 dark:border-gray-850"
+				<!-- Several lines tall: a chosen outfit is written out here in full. -->
+				<textarea
+					class="-mt-1 w-full resize-y rounded-b-lg border border-t-0 border-gray-100 bg-transparent px-2 py-1 text-[11px] outline-none focus:border-gray-400 dark:border-gray-850"
+					rows={states[character.id] ? 3 : 1}
 					placeholder={$i18n.t('Currently wearing… (kept for this chat)')}
 					value={states[character.id] ?? ''}
 					disabled={savingState === character.id}
 					on:blur={(e) => saveState(character.id, e.currentTarget.value)}
-				/>
+				></textarea>
 			{/if}
 		{/each}
 
