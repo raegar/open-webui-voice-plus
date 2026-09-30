@@ -109,6 +109,11 @@ from open_webui.utils.filter import (
 from open_webui.utils.code_interpreter import execute_code_jupyter
 from open_webui.utils.payload import apply_system_prompt_to_body
 from open_webui.utils.character_personality import inject_character_personality
+from open_webui.utils.chat_instructions import (
+    CHAT_INSTRUCTIONS_PARAM,
+    get_stored_chat_instructions,
+    inject_chat_instructions,
+)
 from open_webui.utils.response import normalize_usage
 from open_webui.utils.mcp.client import MCPClient
 
@@ -1962,6 +1967,7 @@ def apply_params_to_form_data(form_data, model):
         "function_calling": str,
         "reasoning_tags": list,
         "system": str,
+        CHAT_INSTRUCTIONS_PARAM: str,
     }
 
     for key in list(params.keys()):
@@ -2089,6 +2095,10 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     # Pipeline Inlet -> Filter Inlet -> Chat Memory -> Chat Web Search -> Chat Image Generation
     # -> Chat Code Interpreter (Form Data Update) -> (Default) Chat Tools Function Calling
     # -> Chat Files
+
+    # Read before the params are stripped. None means the caller sent no value at all
+    # (the web UI always sends one), so the chat's saved instructions are used instead.
+    chat_instructions = (form_data.get("params") or {}).get(CHAT_INSTRUCTIONS_PARAM)
 
     form_data = apply_params_to_form_data(form_data, model)
     log.debug(f"form_data: {form_data}")
@@ -2302,6 +2312,18 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         except Exception:
             # Character metadata should enhance a chat, never prevent it from replying.
             log.exception("Could not apply attached character profiles to chat completion")
+
+    # After the character profiles, so the user's instructions are the last word.
+    try:
+        if chat_instructions is None and chat_id and user and not chat_id.startswith("local:"):
+            chat_instructions = get_stored_chat_instructions(
+                Chats.get_chat_by_id_and_user_id(chat_id, user.id)
+            )
+        form_data["messages"] = inject_chat_instructions(
+            form_data["messages"], chat_instructions
+        )
+    except Exception:
+        log.exception("Could not apply chat instructions to chat completion")
 
     features = form_data.pop("features", None) or {}
     extra_params["__features__"] = features

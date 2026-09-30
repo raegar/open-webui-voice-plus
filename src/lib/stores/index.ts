@@ -1,5 +1,5 @@
 import { APP_NAME } from '$lib/constants';
-import { type Writable, writable } from 'svelte/store';
+import { type Writable, derived, writable } from 'svelte/store';
 import type { ModelConfig } from '$lib/apis';
 import type { Banner } from '$lib/types';
 import type { Socket } from 'socket.io-client';
@@ -64,6 +64,9 @@ export const channelId = writable(null);
 
 export const chats = writable(null);
 export const pinnedChats = writable([]);
+// Chats marked private. Loaded once at startup and kept current by the toggles,
+// so every chat list can filter without asking the server.
+export const privateChatIds = writable<Set<string>>(new Set());
 export const tags = writable([]);
 export const folders = writable([]);
 
@@ -85,6 +88,11 @@ export const pyodideWorker: Writable<Worker | null> = writable(null);
 export const banners: Writable<Banner[]> = writable([]);
 
 export const settings: Writable<Settings> = writable({});
+
+// Work mode: while hidePrivate is on, these chats are left out of every list.
+export const hiddenChatIds = derived([settings, privateChatIds], ([$settings, $privateChatIds]) =>
+	$settings?.hidePrivate ? $privateChatIds : new Set<string>()
+);
 
 export const audioQueue = writable<AudioQueue | null>(null);
 
@@ -226,9 +234,16 @@ type Settings = {
 	videoPromptModel?: string;
 	videoPromptUseChatModel?: boolean;
 	characterDescriptionModel?: string;
+	characterVisionModel?: string;
 	autoTrackCharacterState?: boolean;
+	// Draft the H3 prompt the moment a chat scene opens in Video. Off unless set.
+	autoDraftVideoPrompt?: boolean;
+	// Work mode: hide chats and characters marked private.
+	hidePrivate?: boolean;
 
 	system?: string;
+	// Copied into each new chat as its chat instructions.
+	defaultChatInstructions?: string;
 	seed?: number;
 	temperature?: string;
 	repeat_penalty?: string;

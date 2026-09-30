@@ -14,6 +14,8 @@
 	} from '$lib/apis/chats';
 
 	import ChatsModal from './ChatsModal.svelte';
+	import { hiddenChatIds } from '$lib/stores';
+	import { withoutHidden } from '$lib/utils/privacy';
 	import UnarchiveAllConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 	import Spinner from '../common/Spinner.svelte';
 
@@ -152,7 +154,7 @@
 	bind:direction
 	title={$i18n.t('Archived Chats')}
 	emptyPlaceholder={$i18n.t('You have no archived conversations.')}
-	{chatList}
+	chatList={withoutHidden(chatList, $hiddenChatIds)}
 	{allChatsLoaded}
 	{chatListLoading}
 	onUpdate={() => {

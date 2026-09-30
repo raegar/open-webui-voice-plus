@@ -23,7 +23,9 @@
 		getChatPinnedStatusById,
 		toggleChatPinnedStatusById
 	} from '$lib/apis/chats';
-	import { chats, folders, settings, theme, user } from '$lib/stores';
+	import { toast } from 'svelte-sonner';
+	import { chats, folders, privateChatIds, settings, theme, user } from '$lib/stores';
+	import { markChatPrivate } from '$lib/utils/privacy';
 	import { createMessagesList } from '$lib/utils';
 	import { downloadChatAsPDF } from '$lib/apis/utils';
 	import Download from '$lib/components/icons/Download.svelte';
@@ -56,6 +58,16 @@
 
 	const checkPinned = async () => {
 		pinned = await getChatPinnedStatusById(localStorage.token, chatId);
+	};
+
+	$: isPrivate = $privateChatIds.has(chatId);
+
+	const privateHandler = async () => {
+		try {
+			await markChatPrivate(chatId, !isPrivate);
+		} catch (error) {
+			toast.error(`${error}`);
+		}
 	};
 
 	const getChatAsText = async (chat) => {
@@ -388,6 +400,23 @@
 					<Bookmark strokeWidth="1.5" />
 					<div class="flex items-center">{$i18n.t('Pin')}</div>
 				{/if}
+			</DropdownMenu.Item>
+
+			<DropdownMenu.Item
+				draggable="false"
+				class="flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded-xl"
+				on:click={() => {
+					privateHandler();
+				}}
+			>
+				<input
+					type="checkbox"
+					class="size-4 accent-gray-700 pointer-events-none"
+					tabindex="-1"
+					aria-hidden="true"
+					checked={isPrivate}
+				/>
+				<div class="flex items-center">{$i18n.t('Private')}</div>
 			</DropdownMenu.Item>
 
 			<DropdownMenu.Item

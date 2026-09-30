@@ -72,6 +72,8 @@
 	let expandDetails = false;
 	let renderMarkdownInPreviews = true;
 	let showChatTitleInTab = true;
+	let hidePrivate = false;
+	let autoDraftVideoPrompt = false;
 
 	let showFloatingActionButtons = true;
 	let floatingActionButtons = null;
@@ -245,6 +247,8 @@
 		chatDirection = $settings?.chatDirection ?? 'auto';
 		userLocation = $settings?.userLocation ?? false;
 		showChatTitleInTab = $settings?.showChatTitleInTab ?? true;
+		hidePrivate = $settings?.hidePrivate ?? false;
+		autoDraftVideoPrompt = $settings?.autoDraftVideoPrompt ?? false;
 
 		notificationSound = $settings?.notificationSound ?? true;
 		notificationSoundAlways = $settings?.notificationSoundAlways ?? false;
@@ -445,6 +449,44 @@
 							bind:state={showChatTitleInTab}
 							on:change={() => {
 								saveSettings({ showChatTitleInTab });
+							}}
+						/>
+					</div>
+				</div>
+			</div>
+
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div id="hide-private-label" class=" self-center text-xs">
+						{$i18n.t('Work mode: hide private chats and characters')}
+					</div>
+
+					<div class="flex items-center gap-2 p-1">
+						<Switch
+							ariaLabelledbyId="hide-private-label"
+							tooltip={true}
+							bind:state={hidePrivate}
+							on:change={() => {
+								saveSettings({ hidePrivate });
+							}}
+						/>
+					</div>
+				</div>
+			</div>
+
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div id="auto-draft-video-prompt-label" class=" self-center text-xs">
+						{$i18n.t('Draft the video prompt as soon as a chat scene opens in Video')}
+					</div>
+
+					<div class="flex items-center gap-2 p-1">
+						<Switch
+							ariaLabelledbyId="auto-draft-video-prompt-label"
+							tooltip={true}
+							bind:state={autoDraftVideoPrompt}
+							on:change={() => {
+								saveSettings({ autoDraftVideoPrompt });
 							}}
 						/>
 					</div>

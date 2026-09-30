@@ -12,6 +12,7 @@ COPY --from=builder /build/build /app/build
 # Python backend patches (not part of the npm build)
 COPY --from=builder /build/backend/open_webui/utils/middleware.py /app/backend/open_webui/utils/middleware.py
 COPY --from=builder /build/backend/open_webui/utils/character_personality.py /app/backend/open_webui/utils/character_personality.py
+COPY --from=builder /build/backend/open_webui/utils/chat_instructions.py /app/backend/open_webui/utils/chat_instructions.py
 COPY --from=builder /build/backend/open_webui/utils/task.py /app/backend/open_webui/utils/task.py
 COPY --from=builder /build/backend/open_webui/utils/tools.py /app/backend/open_webui/utils/tools.py
 # Patch tools.py — add has_tool_server_access stub (referenced by middleware.py but missing from fork)
@@ -22,6 +23,9 @@ COPY --from=builder /build/backend/open_webui/routers/images.py /app/backend/ope
 COPY --from=builder /build/backend/open_webui/routers/videos.py /app/backend/open_webui/routers/videos.py
 COPY --from=builder /build/backend/open_webui/utils/videos /app/backend/open_webui/utils/videos
 COPY --from=builder /build/backend/open_webui/models/video_characters.py /app/backend/open_webui/models/video_characters.py
+# Private chats for work mode: the fork's own table and router.
+COPY --from=builder /build/backend/open_webui/models/private_chats.py /app/backend/open_webui/models/private_chats.py
+COPY --from=builder /build/backend/open_webui/routers/privacy.py /app/backend/open_webui/routers/privacy.py
 # Patch main.py — add REPLACE_EMDASH_WITH_SEMICOLON import and app.state assignment
 RUN sed -i 's/    RESPONSE_WATERMARK,$/    RESPONSE_WATERMARK,\n    REPLACE_EMDASH_WITH_SEMICOLON,/' /app/backend/open_webui/main.py
 RUN sed -i 's/app\.state\.config\.RESPONSE_WATERMARK = RESPONSE_WATERMARK/app.state.config.RESPONSE_WATERMARK = RESPONSE_WATERMARK\napp.state.config.REPLACE_EMDASH_WITH_SEMICOLON = REPLACE_EMDASH_WITH_SEMICOLON/' /app/backend/open_webui/main.py
@@ -38,6 +42,11 @@ RUN sed -i 's/    images,$/    images,\n    videos,/' /app/backend/open_webui/ma
     && sed -i "s/'enable_image_generation': app\.state\.config\.ENABLE_IMAGE_GENERATION,/'enable_image_generation': app.state.config.ENABLE_IMAGE_GENERATION,\n                    'enable_video_generation': app.state.config.ENABLE_VIDEO_GENERATION,/" /app/backend/open_webui/main.py \
     && grep -q 'include_router(videos.router' /app/backend/open_webui/main.py \
     && grep -q "'enable_video_generation'" /app/backend/open_webui/main.py
+# Register the privacy router next to videos, which the step above just added.
+RUN sed -i 's/^    videos,$/    videos,\n    privacy,/' /app/backend/open_webui/main.py \
+    && sed -i "s|app.include_router(videos.router, prefix='/api/v1/videos', tags=\['videos'\])|app.include_router(videos.router, prefix='/api/v1/videos', tags=['videos'])\napp.include_router(privacy.router, prefix='/api/v1/privacy', tags=['privacy'])|" /app/backend/open_webui/main.py \
+    && grep -q '^    privacy,$' /app/backend/open_webui/main.py \
+    && grep -q 'include_router(privacy.router' /app/backend/open_webui/main.py
 # Scheduled jobs feature (local files — not from fork, no GitHub push needed)
 COPY backend/open_webui/models/scheduled_jobs.py /app/backend/open_webui/models/scheduled_jobs.py
 COPY backend/open_webui/routers/scheduled_jobs.py /app/backend/open_webui/routers/scheduled_jobs.py

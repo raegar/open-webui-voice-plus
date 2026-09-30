@@ -27,11 +27,17 @@
 		selectedFolder,
 		WEBUI_NAME,
 		sidebarWidth,
-		activeChatIds
+		activeChatIds,
+		hiddenChatIds
 	} from '$lib/stores';
+	import { withoutHidden } from '$lib/utils/privacy';
 	import { onMount, getContext, tick, onDestroy } from 'svelte';
 
 	const i18n = getContext('i18n');
+
+	// Work mode leaves private chats out of the sidebar entirely.
+	$: visibleChats = withoutHidden($chats, $hiddenChatIds);
+	$: visiblePinnedChats = withoutHidden($pinnedChats, $hiddenChatIds) ?? [];
 
 	import {
 		getChatList,
@@ -1284,7 +1290,7 @@
 						}
 					}}
 				>
-					{#if $pinnedChats.length > 0}
+					{#if visiblePinnedChats.length > 0}
 						<div class="mb-1">
 							<div class="flex flex-col space-y-1 rounded-xl">
 								<Folder
@@ -1339,7 +1345,7 @@
 									<div
 										class="ml-3 pl-1 mt-[1px] flex flex-col overflow-y-auto scrollbar-hidden border-s border-gray-100 dark:border-gray-900 text-gray-900 dark:text-gray-200"
 									>
-										{#each $pinnedChats as chat, idx (`pinned-chat-${chat?.id ?? idx}`)}
+										{#each visiblePinnedChats as chat, idx (`pinned-chat-${chat?.id ?? idx}`)}
 											<ChatItem
 												className=""
 												id={chat.id}
@@ -1370,9 +1376,9 @@
 
 					<div class=" flex-1 flex flex-col overflow-y-auto scrollbar-hidden">
 						<div class="pt-1.5">
-							{#if $chats}
-								{#each $chats as chat, idx (`chat-${chat?.id ?? idx}`)}
-									{#if idx === 0 || (idx > 0 && chat.time_range !== $chats[idx - 1].time_range)}
+							{#if visibleChats}
+								{#each visibleChats as chat, idx (`chat-${chat?.id ?? idx}`)}
+									{#if idx === 0 || (idx > 0 && chat.time_range !== visibleChats[idx - 1].time_range)}
 										<div
 											class="w-full pl-2.5 text-xs text-gray-500 dark:text-gray-500 font-medium {idx ===
 											0

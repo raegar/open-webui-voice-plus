@@ -21,6 +21,7 @@
 	let lang = $i18n.language;
 	let notificationEnabled = false;
 	let system = '';
+	let defaultChatInstructions = '';
 
 	let showAdvanced = false;
 
@@ -70,6 +71,8 @@
 	const saveHandler = async () => {
 		saveSettings({
 			system: system !== '' ? system : undefined,
+			defaultChatInstructions:
+				defaultChatInstructions.trim() !== '' ? defaultChatInstructions : undefined,
 			params: {
 				stream_response: params.stream_response !== null ? params.stream_response : undefined,
 				stream_delta_chunk_size:
@@ -118,6 +121,7 @@
 
 		notificationEnabled = $settings.notificationEnabled ?? false;
 		system = $settings.system ?? '';
+		defaultChatInstructions = $settings.defaultChatInstructions ?? '';
 
 		params = { ...params, ...$settings.params };
 		params.stop = $settings?.params?.stop ? ($settings?.params?.stop ?? []).join(',') : null;
@@ -298,6 +302,26 @@
 				/>
 			</div>
 		{/if}
+
+		<hr class="border-gray-100/30 dark:border-gray-850/30 my-3" />
+
+		<div>
+			<div class=" my-2.5 text-sm font-medium">{$i18n.t('Default Chat Instructions')}</div>
+			<Textarea
+				bind:value={defaultChatInstructions}
+				className={'w-full text-sm outline-hidden resize-vertical' +
+					($settings.highContrastMode
+						? ' p-2.5 border-2 border-gray-300 dark:border-gray-700 rounded-lg bg-transparent text-gray-900 dark:text-gray-100 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 overflow-y-hidden'
+						: '  dark:text-gray-300 ')}
+				rows="3"
+				placeholder={$i18n.t('Instructions every new chat starts with')}
+			/>
+			<div class="mt-1 text-xs text-gray-500">
+				{$i18n.t(
+					'Copied into each new chat, where you can edit or clear it under Chat Instructions in Controls. Changing this does not affect existing chats.'
+				)}
+			</div>
+		</div>
 
 		{#if $user?.role === 'admin' || (($user?.permissions.chat?.controls ?? true) && ($user?.permissions.chat?.params ?? true))}
 			<div class="mt-2 space-y-3 pr-1.5">

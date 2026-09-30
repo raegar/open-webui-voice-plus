@@ -14,6 +14,7 @@
 	import { getBanners } from '$lib/apis/configs';
 	import { getTerminalServers } from '$lib/apis/terminal';
 	import { getUserSettings } from '$lib/apis/users';
+	import { loadPrivateChatIds } from '$lib/utils/privacy';
 
 	import { WEBUI_VERSION, WEBUI_API_BASE_URL } from '$lib/constants';
 	import { compareVersion } from '$lib/utils';
@@ -205,6 +206,8 @@
 			checkLocalDBChats(),
 			setBanners().catch((e) => console.error('Failed to load banners:', e)),
 			setTools().catch((e) => console.error('Failed to load tools:', e)),
+			// Before the sidebar renders, so work mode never flashes a private chat.
+			loadPrivateChatIds().catch((e) => console.error('Failed to load private chats:', e)),
 			setUserSettings(async () => {
 				await Promise.all([
 					setModels().catch((e) => console.error('Failed to load models:', e)),

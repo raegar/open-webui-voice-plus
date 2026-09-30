@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount } from 'svelte';
-	import { models } from '$lib/stores';
+	import { hiddenChatIds, models } from '$lib/stores';
 	import { getChatList } from '$lib/apis/chats';
 	import type { ScheduledJobForm } from '$lib/apis/scheduled-jobs';
 
@@ -44,9 +44,18 @@
 	}
 
 	function parseSchedule(schedule: string) {
-		if (schedule === 'daily' || !schedule) { scheduleType = 'daily'; return; }
-		if (schedule === 'weekdays') { scheduleType = 'weekdays'; return; }
-		if (schedule === 'weekends') { scheduleType = 'weekends'; return; }
+		if (schedule === 'daily' || !schedule) {
+			scheduleType = 'daily';
+			return;
+		}
+		if (schedule === 'weekdays') {
+			scheduleType = 'weekdays';
+			return;
+		}
+		if (schedule === 'weekends') {
+			scheduleType = 'weekends';
+			return;
+		}
 		scheduleType = 'custom';
 		customDays = [false, false, false, false, false, false, false];
 		schedule.split(',').forEach((d) => {
@@ -56,7 +65,9 @@
 	}
 
 	onMount(async () => {
-		chats = (await getChatList(localStorage.token)) ?? [];
+		chats = ((await getChatList(localStorage.token)) ?? []).filter(
+			(chat) => !$hiddenChatIds.has(chat.id)
+		);
 
 		if (job) {
 			title = job.title;

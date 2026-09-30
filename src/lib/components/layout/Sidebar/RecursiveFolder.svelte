@@ -11,7 +11,8 @@
 	import { goto } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
 
-	import { chatId, mobile, selectedFolder, showSidebar } from '$lib/stores';
+	import { chatId, hiddenChatIds, mobile, selectedFolder, showSidebar } from '$lib/stores';
+	import { withoutHidden } from '$lib/utils/privacy';
 
 	import {
 		deleteFolderById,
@@ -677,7 +678,7 @@
 						{/each}
 					{/if}
 
-					{#each chats ?? [] as chat (chat.id)}
+					{#each withoutHidden(chats, $hiddenChatIds) ?? [] as chat (chat.id)}
 						<ChatItem
 							id={chat.id}
 							title={chat.title}

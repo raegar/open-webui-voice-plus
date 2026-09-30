@@ -17,6 +17,7 @@
 	import {
 		chatId,
 		pendingChatCharacterIds,
+		hiddenChatIds,
 		chats,
 		config,
 		type Model,
@@ -112,6 +113,12 @@
 
 	export let chatIdProp = '';
 
+	// Work mode hides private chats. Leave one that is open, or opened by link,
+	// rather than keep it on screen.
+	$: if ($chatId && $hiddenChatIds.has($chatId)) {
+		goto('/');
+	}
+
 	let loading = true;
 
 	const eventTarget = new EventTarget();
@@ -181,6 +188,30 @@
 	let chatFiles = [];
 	let files = [];
 	let params = {};
+
+	// Chat instructions are saved as they are edited, not only when the next reply
+	// finishes, so leaving a chat straight after changing them does not lose the edit.
+	let savedChatInstructions = '';
+	let chatInstructionsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+	$: scheduleChatInstructionsSave(params?.chat_instructions ?? '');
+
+	const scheduleChatInstructionsSave = (text: string) => {
+		if (text === savedChatInstructions) return;
+		const targetChatId = $chatId;
+		if (!targetChatId || targetChatId.startsWith('local:') || $temporaryChatEnabled) return;
+		// Snapshot now: by the time the timer fires the user may be in another chat.
+		const snapshot = { ...params };
+		if (chatInstructionsSaveTimer) clearTimeout(chatInstructionsSaveTimer);
+		chatInstructionsSaveTimer = setTimeout(async () => {
+			chatInstructionsSaveTimer = null;
+			try {
+				await updateChatById(localStorage.token, targetChatId, { params: snapshot });
+				if ($chatId === targetChatId) savedChatInstructions = text;
+			} catch (error) {
+				toast.error(`Chat instructions could not be saved: ${error}`);
+			}
+		}, 800);
+	};
 
 	// Message queue for storing messages while generating
 	let messageQueue: { id: string; prompt: string; files: any[] }[] = [];
@@ -1187,7 +1218,11 @@
 		};
 
 		chatFiles = [];
-		params = {};
+		// A new thread starts with the default instructions from Settings, if any.
+		params = $settings?.defaultChatInstructions
+			? { chat_instructions: $settings.defaultChatInstructions }
+			: {};
+		savedChatInstructions = params?.chat_instructions ?? '';
 		taskIds = null;
 		messageQueue = [];
 
@@ -1291,6 +1326,7 @@
 				chatTitle.set(chatContent.title);
 
 				params = chatContent?.params ?? {};
+				savedChatInstructions = params?.chat_instructions ?? '';
 				chatFiles = chatContent?.files ?? [];
 
 				autoScroll = true;
@@ -2263,6 +2299,8 @@
 				params: {
 					...$settings?.params,
 					...params,
+					// Always sent, even empty, so the backend knows not to fall back to the saved copy.
+					chat_instructions: params?.chat_instructions ?? '',
 					stop: getStopTokens()
 				},
 

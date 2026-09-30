@@ -13,7 +13,8 @@
 	import calendar from 'dayjs/plugin/calendar';
 	import Loader from '../common/Loader.svelte';
 	import { createMessagesList } from '$lib/utils';
-	import { config, user } from '$lib/stores';
+	import { config, hiddenChatIds, user } from '$lib/stores';
+	import { withoutHidden } from '$lib/utils/privacy';
 	import Messages from '../chat/Messages.svelte';
 	import { goto } from '$app/navigation';
 	import PencilSquare from '../icons/PencilSquare.svelte';
@@ -122,10 +123,13 @@
 		page = 1;
 		chatList = null;
 		if (query === '') {
-			chatList = await getChatList(localStorage.token, page);
+			chatList = withoutHidden(await getChatList(localStorage.token, page), $hiddenChatIds);
 		} else {
 			searchDebounceTimeout = setTimeout(async () => {
-				chatList = await getChatListBySearchText(localStorage.token, query, page);
+				chatList = withoutHidden(
+					await getChatListBySearchText(localStorage.token, query, page),
+					$hiddenChatIds
+				);
 
 				if ((chatList ?? []).length === 0) {
 					allChatsLoaded = true;
@@ -163,7 +167,7 @@
 		allChatsLoaded = newChatList.length === 0;
 
 		if (newChatList.length > 0) {
-			chatList = [...chatList, ...newChatList];
+			chatList = [...chatList, ...(withoutHidden(newChatList, $hiddenChatIds) ?? [])];
 		}
 
 		chatListLoading = false;

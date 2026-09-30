@@ -10,6 +10,8 @@
 	import FolderKnowledge from './FolderKnowledge.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { getChatListByFolderId } from '$lib/apis/chats';
+	import { hiddenChatIds } from '$lib/stores';
+	import { withoutHidden } from '$lib/utils/privacy';
 
 	export let folder: any = null;
 
@@ -100,7 +102,12 @@
 			<FolderKnowledge />
 		{:else if selectedTab === 'chats'}
 			{#if chats !== null}
-				<ChatList {chats} {chatListLoading} {allChatsLoaded} loadHandler={loadChats} />
+				<ChatList
+					chats={withoutHidden(chats, $hiddenChatIds) ?? []}
+					{chatListLoading}
+					{allChatsLoaded}
+					loadHandler={loadChats}
+				/>
 			{:else}
 				<div class="py-10">
 					<Spinner />
