@@ -154,6 +154,20 @@ TALK_TASK = (
     "The player is talking to you out of character. Answer them, then update your "
     "plan and rewrite the note for the next reply wherever their words change it."
 )
+# Restated last, where the model reads it most recently: some models write their
+# reasoning as prose and stop without the plan.
+SHAPE_REMINDER = (
+    "Reply in the required shape: {talk}<gm_reasoning>...</gm_reasoning>, then "
+    "<gm_plan> with the JSON object. The plan is required: without it nothing you "
+    "decide reaches the story."
+)
+# Sent once when a reply has no readable plan, continuing from the GM's own reasoning.
+REPAIR_PROMPT = (
+    "Your reply stopped before the plan, so none of it can reach the story yet. Reply "
+    "now with only the <gm_plan> block: the JSON object from your instructions "
+    "(observations, update, remove, note), following the reasoning you just wrote. "
+    "No other text."
+)
 
 TALK_ADDENDUM = """
 
@@ -769,11 +783,23 @@ def build_gm_messages(
         tasks.append(TURN_TASK)
     if kind == "reroll" and _text(rejected_note):
         tasks.append(REROLL_TASK.format(rejected=rejected_note.strip()))
+    tasks.append(
+        SHAPE_REMINDER.format(talk="<gm_reply>...</gm_reply>, then " if kind == "table_talk" else "")
+    )
     sections.append("## Your task\n" + "\n\n".join(tasks))
 
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": "\n\n".join(sections)},
+    ]
+
+
+def build_repair_messages(gm_messages: list[dict], reply: str) -> list[dict]:
+    """The pass's messages, its planless reply, and a request for only the plan."""
+    return [
+        *gm_messages,
+        {"role": "assistant", "content": reply},
+        {"role": "user", "content": REPAIR_PROMPT},
     ]
 
 
@@ -1007,10 +1033,33 @@ async def run_gm_pass(
                     bypass_system_prompt=True,
                 )
                 content, model_reasoning, tokens = _reply_parts(response)
+                raw = content
                 gm_reply = ""
                 if kind == "table_talk":
                     gm_reply, content = parse_gm_talk(content)
                 reasoning, plan = parse_gm_reply(content)
+                if plan is None:
+                    # One repair turn: ask for just the plan, after its own reasoning.
+                    response = await generate_chat_completion(
+                        request,
+                        form_data={
+                            "model": gm_model,
+                            "messages": build_repair_messages(gm_messages, raw),
+                            "stream": False,
+                            token_key: MAX_TOKENS,
+                            "metadata": {"task": "game_master", "chat_id": chat_id},
+                        },
+                        user=user,
+                        bypass_filter=True,
+                        bypass_system_prompt=True,
+                    )
+                    repair, repair_reasoning, repair_tokens = _reply_parts(response)
+                    tokens += repair_tokens
+                    if repair_reasoning:
+                        model_reasoning = (model_reasoning + "\n\n" + repair_reasoning).strip()
+                    _, plan = parse_gm_reply(repair)
+                    if plan is not None:
+                        log.info("GM plan recovered by a repair turn for chat %s", chat_id)
                 duration_ms = int((time.monotonic() - started) * 1000)
                 common = {
                     "message_id": message_id or "",

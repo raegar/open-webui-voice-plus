@@ -350,3 +350,28 @@ def test_prompt_task_follows_the_kind_of_pass():
 
     first_talk = build_gm_messages(**base, state=None, kind="table_talk", talk="hello")
     assert "session zero" in first_talk[1]["content"]
+
+
+def test_a_planless_reply_gets_one_repair_turn():
+    from open_webui.utils.game_master import REPAIR_PROMPT, build_repair_messages
+
+    pass_messages = [{"role": "system", "content": "GM"}, {"role": "user", "content": "plan"}]
+    repair = build_repair_messages(pass_messages, "Sam is wavering; she should hold firm.")
+    assert repair[:2] == pass_messages
+    assert repair[2] == {"role": "assistant", "content": "Sam is wavering; she should hold firm."}
+    assert repair[3] == {"role": "user", "content": REPAIR_PROMPT}
+    # The recovered plan parses on its own.
+    _, plan = parse_gm_reply('<gm_plan>{"note": "Sam: hold firm."}</gm_plan>')
+    assert plan == {"note": "Sam: hold firm."}
+
+
+def test_every_pass_ends_by_restating_the_reply_shape():
+    common = dict(
+        characters=[], player_character_id="", config={}, chat_instructions="",
+        state=None, last_note="", conversation=[],
+    )
+    turn = build_gm_messages(**common)[1]["content"]
+    assert turn.rstrip().endswith("without it nothing you decide reaches the story.")
+    assert "<gm_reply>" not in turn
+    talk = build_gm_messages(**common, kind="table_talk", talk="hi")[1]["content"]
+    assert "<gm_reply>...</gm_reply>, then <gm_reasoning>" in talk
