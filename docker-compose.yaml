@@ -14,7 +14,9 @@ services:
     extra_hosts:
       - host.docker.internal:host-gateway
     environment:
-      - WEBUI_SECRET_KEY=apple-code-minion-hotdog-carpet-mask-snowflake-staple
+      # Read from the gitignored .env next to this file. This repo is public, so
+      # the key itself must never be written here.
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:?Set WEBUI_SECRET_KEY in .env}
       - TZ=Europe/London
       - ENABLE_IMAGE_GENERATION=True
       - AUTOMATIC1111_BASE_URL=http://host.docker.internal:7861
