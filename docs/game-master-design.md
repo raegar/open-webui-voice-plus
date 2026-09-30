@@ -236,9 +236,33 @@ Each NPC has a separate **look**: a fixed visual description, written once when 
 
 Each NPC can get a **portrait**: one still image generated through the existing ComfyUI setup. It pins down their design visually, as the attached reference images already do for library characters. It's shown on the NPC in the transcript, and it can go to Video Studio as a reference picture.
 
-**How it's made.** ComfyUI only has the MiniMax H3 video models installed, not an image model, so the portrait comes from H3 itself. It's a text-to-video run at the shortest length the workflow allows (one 17-frame block), and it stops before a video is made: the graph that normally ends `VAEDecode → CreateVideo → SaveVideo` instead ends `VAEDecode → ImageFromBatch → SaveImage`, keeping a single frame from the middle of the batch. The first frames of a clip tend to be the least resolved. This needs no new models, and portraits come from the same model the videos use, so the design carries over when the NPC appears in a clip. (ffmpeg is also in the container, so taking a frame from a normal short MP4 is a fallback if the graph change fights us.)
+**The model: Z-Image-Turbo.** A dedicated still-image model, added to the existing ComfyUI install. It was chosen for three things:
 
-The prompt is built from the NPC's `look`, framed to make a good reference: three-quarter length so the outfit shows, facing the camera, still, even light, plain background. Portrait orientation (9:16, 0.4 MP), no LoRAs except turbo. A style LoRA would bake a style into the reference that then fights whatever style the video uses.
+- **Realistic people.** Portraits are its strength. Its text encoder is Qwen3-4B, which follows a long, specific description ("narrow face, slicked-back dark hair, grey wool overcoat, black gloves") rather than falling back on a generic face.
+- **Fast.** It's distilled to about 8 steps at CFG 1, a few seconds per image on this GPU.
+- **Small.** It fits the RTX 4080 SUPER's 16 GB easily, so it never has to page against the H3 video models.
+
+Files, from [Comfy-Org/z_image_turbo](https://huggingface.co/Comfy-Org/z_image_turbo) (`split_files/`):
+
+| File | Size | ComfyUI folder |
+| --- | --- | --- |
+| `z_image_turbo_int8_convrot.safetensors` | 6.2 GB | `models/diffusion_models` |
+| `qwen_3_4b_fp8_mixed.safetensors` | 5.6 GB | `models/text_encoders` |
+| `ae.safetensors` | 0.3 GB | `models/vae` (rename to `z_image_ae.safetensors`) |
+
+The int8 ConvRot build is the same quantisation format the installed H3 models use, so this ComfyUI already supports it. The NVFP4 builds are smaller but need native FP4, which this GPU (Ada) doesn't have. `ae.safetensors` is the generic FLUX autoencoder name, so it gets a distinct name to keep it from being mistaken for something else in the VAE folder.
+
+FLUX.2 [klein] 4B was the runner-up. It's a little faster and follows prompts slightly better, and it can edit from a reference image, which would be useful later for showing an NPC in a new outfit. Z-Image-Turbo produces more convincing realistic portraits, which is what matters for a reference.
+
+**Clearing memory around a portrait.** The H3 models add up to about 42 GB (21 GB video model, 15.7 GB text encoder, 5.8 GB of autoencoders), more than VRAM and system RAM together can comfortably hold on a 32 GB machine. Left to itself, ComfyUI would push H3 out to system RAM to make room for Z-Image. That's exactly the memory pressure the known ComfyUI crashes come from. So a portrait job:
+
+1. calls ComfyUI's `POST /free` with `{"unload_models": true, "free_memory": true}` **before** it starts, so H3 is dropped rather than moved into RAM;
+2. runs the Z-Image graph (text encode → 8-step sample → decode → `SaveImage`), at about 1 MP in portrait orientation (832×1216);
+3. calls `/free` again **after**, so Z-Image is out of VRAM and RAM before the next video needs them.
+
+The price is that a video following a portrait reloads H3 from disk. That's a reload it often pays anyway, and far cheaper than a crash. Because both happen through the one queue, a portrait and a video can never be on the GPU at the same time.
+
+The prompt is built from the NPC's `look`, framed to make a good reference: three-quarter length so the outfit shows, facing the camera, natural expression, even light, plain background, realistic photograph. No style is applied. The reference should show what the NPC looks like, and the video's own style settings decide how the clip is rendered.
 
 **When it runs.** The GM asks for a portrait when it first brings an NPC on stage. Portraits go through the **existing video generation queue**, so they never compete with a video render for the GPU, and a portrait waits its turn behind a video already running. A portrait is short, so it shouldn't hold up a video queued after it for long. Nothing in the chat waits for it: the NPC's card and look work without it.
 
@@ -339,7 +363,7 @@ Deleting a chat deletes its GM session and journal. The journal follows the chat
 | Trigger after reply | `background_tasks_handler` in `utils/middleware.py`, next to title and tag generation, emitting a `chat:gm` event |
 | UI: toggle, agenda, intensity, current note, table talk | new section in `Controls/Controls.svelte` |
 | `/gm` shortcut | message input: route to table talk instead of sending to the chat |
-| Portrait workflow (single frame from H3) | `utils/videos/comfyui.py`, alongside the existing graph builders |
+| Portrait workflow (Z-Image-Turbo, with `/free` before and after) | new `utils/images/zimage.py`, reusing the ComfyUI client in `utils/videos/comfyui.py` |
 | Portrait jobs | the existing video job queue in `routers/videos.py`, as a new job type |
 | NPC references in Video Studio | scene handoff in `ResponseMessage.svelte`, reference picker in `video/+page.svelte` |
 | UI: transcript | new component, opened from Controls and from a marker in `ResponseMessage.svelte` |
@@ -362,7 +386,7 @@ Deleting a chat deletes its GM session and journal. The journal follows the chat
 3. **Table talk.** The out-of-character conversation, `player_requests`, the immediate pass, and the `/gm` shortcut.
 4. **Controls.** Agenda, intensity, "played by me", current note, Consult now, Reroll, cadence.
 5. **Branch-correct state.** Nearest-ancestor snapshot lookup, with tests covering regenerate and branch switching.
-6. **NPC portraits.** Single-frame H3 workflow, portrait jobs on the video queue, Regenerate, and NPC references in the Video Studio handoff within the 9-picture limit.
+6. **NPC portraits.** Z-Image-Turbo workflow, portrait jobs on the video queue with memory cleared before and after, Regenerate, and NPC references in the Video Studio handoff within the 9-picture limit.
 
 Stage 1 is enough to find out whether the idea works at all. Everything after it is about control and visibility.
 
@@ -371,5 +395,5 @@ Stage 1 is enough to find out whether the idea works at all. Everything after it
 ## Open questions
 
 - **Should the GM's state be editable directly?** Table talk now covers corrections ("Sam doesn't know that yet"), and the GM applies them itself, which keeps the state consistent. Direct editing can wait until table talk proves not to be enough.
-- **Portrait quality.** H3 is a video model, and a single frame at 0.4 MP may be softer than a dedicated image model would give. It's good enough for a reference if Ref2VA holds the likeness, and that has to be tested before anything else is built on it. If it isn't, the options are a higher-resolution run for portraits only, or installing a separate image model, which costs RAM on a machine where ComfyUI already crashes under memory pressure.
+- **Does Ref2VA hold a Z-Image likeness?** Test it with a hand-made portrait before building the handoff: generate one NPC, use it as a reference in Video Studio, and check the face survives into the clip.
 - **Dice.** A DM leans on dice for uncertain outcomes. The GM could roll for risky attempts and show the roll in the transcript, which would make "the world decides" feel fair rather than arbitrary. Worth trying once the core loop works.
