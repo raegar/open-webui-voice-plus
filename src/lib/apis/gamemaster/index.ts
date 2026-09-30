@@ -6,16 +6,54 @@ export type GameMasterConfig = {
 	agenda: string;
 	intensity: GameMasterIntensity;
 	player_character_id: string;
+	/** Run a turn pass after every Nth reply. */
+	cadence: 1 | 2 | 3;
+	auto_portraits: boolean;
+};
+
+export type GameMasterChange = { text: string; spoiler: boolean };
+
+export type GameMasterPortrait = {
+	npc_id: string;
+	name: string;
+	look: string;
+	status: 'queued' | 'running' | 'ready' | 'failed';
+	file_id: string;
+	seed: string;
+	error: string;
+	updated_at: number;
+};
+
+export type GameMasterTalk = { id: string; player: string; gm: string; created_at: number };
+
+export type GameMasterIndexEntry = {
+	id: string;
+	message_id: string;
+	created_at: number;
+	error: string;
+	has_state: boolean;
+	kind: string;
+};
+
+export type SceneNpc = {
+	npc_id: string;
+	name: string;
+	card: string;
+	look: string;
+	file_id: string;
 };
 
 export type GameMasterEntry = {
 	id: string;
 	message_id: string;
-	kind: 'setup' | 'turn' | 'consult';
+	kind: 'setup' | 'turn' | 'consult' | 'reroll' | 'table_talk';
+	prior_id: string;
+	user_message: string;
+	gm_reply: string;
 	reasoning: string;
 	model_reasoning: string;
 	observations: string[];
-	patch: Record<string, any>;
+	patch: { update?: any; remove?: any; changes?: GameMasterChange[] };
 	state: Record<string, any> | null;
 	note: string;
 	model: string;
@@ -34,6 +72,8 @@ export type GameMasterStatus = {
 	/** A failed pass newer than `current`, if any. */
 	last_error: { error: string; created_at: number } | null;
 	entries: number;
+	portraits: GameMasterPortrait[];
+	talk: GameMasterTalk[];
 };
 
 const gmRequest = async (token: string, path: string, init: RequestInit = {}) => {
@@ -80,3 +120,69 @@ export const getGameMasterJournal = async (
 	limit = 100
 ): Promise<GameMasterEntry[]> =>
 	(await gmRequest(token, `${chatPath(chatId)}/journal?limit=${limit}`)) ?? [];
+
+export const getGameMasterIndex = async (
+	token: string,
+	chatId: string
+): Promise<{ enabled: boolean; entries: GameMasterIndexEntry[] }> =>
+	await gmRequest(token, `${chatPath(chatId)}/index`);
+
+export const talkToGameMaster = async (
+	token: string,
+	chatId: string,
+	message: string
+): Promise<{ reply: string; status: GameMasterStatus }> =>
+	await gmRequest(token, `${chatPath(chatId)}/talk`, {
+		method: 'POST',
+		body: JSON.stringify({ message })
+	});
+
+export const rerollGameMaster = async (token: string, chatId: string): Promise<GameMasterStatus> =>
+	await gmRequest(token, `${chatPath(chatId)}/reroll`, { method: 'POST', body: '{}' });
+
+export const regenerateNpcPortrait = async (
+	token: string,
+	chatId: string,
+	npcId: string
+): Promise<GameMasterStatus> =>
+	await gmRequest(token, `${chatPath(chatId)}/npcs/${encodeURIComponent(npcId)}/portrait`, {
+		method: 'POST',
+		body: '{}'
+	});
+
+export const getSceneNpcs = async (
+	token: string,
+	chatId: string,
+	messageId: string
+): Promise<SceneNpc[]> =>
+	(await gmRequest(
+		token,
+		`${chatPath(chatId)}/scene-npcs?message_id=${encodeURIComponent(messageId)}`
+	)) ?? [];
+
+/**
+ * The GM pass whose direction shaped the reply to `messageId`'s parent chain: the
+ * newest successful entry on the nearest ancestor that has one. Mirrors the server's
+ * find_state_entry_id, so the marker points at the direction that was really in force.
+ */
+export const findSteeringEntry = (
+	entries: GameMasterIndexEntry[],
+	messages: Record<string, any>,
+	startId: string | null | undefined
+): GameMasterIndexEntry | null => {
+	const byMessage = new Map<string, GameMasterIndexEntry>();
+	for (const entry of entries) {
+		if (!entry.has_state) continue;
+		const current = byMessage.get(entry.message_id);
+		if (!current || entry.created_at >= current.created_at) byMessage.set(entry.message_id, entry);
+	}
+	const seen = new Set<string>();
+	let id = startId ?? null;
+	while (id && !seen.has(id)) {
+		seen.add(id);
+		const found = byMessage.get(id);
+		if (found) return found;
+		id = messages?.[id]?.parentId ?? null;
+	}
+	return byMessage.get('') ?? null;
+};

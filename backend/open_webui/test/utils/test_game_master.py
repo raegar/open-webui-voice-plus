@@ -218,3 +218,135 @@ def test_gm_uses_the_base_model_behind_a_persona():
     assert resolve_gm_model(models, "@preset/rp") == "@preset/rp"
     # A base model that is no longer registered falls back to the chat's own id.
     assert resolve_gm_model({"x": {"info": {"base_model_id": "gone"}}}, "x") == "x"
+
+
+# --- Stages 2-6 ---------------------------------------------------------------
+
+from open_webui.utils.game_master import (  # noqa: E402
+    count_replies_since,
+    describe_changes,
+    npcs_needing_portraits,
+    parse_gm_talk,
+    scene_npcs,
+)
+
+
+def test_changes_read_as_lines_with_spoilers_flagged():
+    before = {
+        "characters": {"Sam": {"stance": {"leaving": {"position": "maybe"}}}},
+        "clocks": [{"id": "c1", "label": "patience", "filled": 3, "size": 6}],
+        "npcs": [{"id": "n1", "name": "Marek", "status": "planned", "card": "a nephew"}],
+    }
+    after = {
+        "characters": {
+            "Sam": {"fear": "being found", "stance": {"leaving": {"position": "no", "price": "the truth"}}}
+        },
+        "clocks": [{"id": "c1", "label": "patience", "filled": 6, "size": 6, "on_full": "police"}],
+        "npcs": [
+            {"id": "n1", "name": "Marek", "status": "on_stage", "card": "a nephew"},
+            {"id": "n2", "name": "Ivo", "status": "planned", "card": "a buyer"},
+        ],
+        "secrets": [{"id": "s1", "text": "Sam has the key", "known_by": ["Sam"]}],
+        "threads": [{"id": "t1", "title": "the buyer", "status": "seeded", "gm_only": True}],
+        "player_requests": [{"id": "r1", "text": "a rival", "status": "planned"}],
+    }
+    lines = {line["text"]: line["spoiler"] for line in describe_changes(before, after)}
+
+    assert lines["Sam on leaving: maybe → no (moves only if: the truth)"] is False
+    assert lines["Sam fears: being found"] is True
+    assert lines["patience: 3 → 6 of 6"] is False
+    assert lines["patience is full: police"] is False
+    assert lines["Marek: planned → on stage"] is False
+    assert lines["New NPC waiting in the wings: Ivo: a buyer"] is True
+    assert lines["Secret: Sam has the key"] is True
+    assert lines["New thread: the buyer (seeded)"] is True
+    assert lines["Your request: a rival (planned)"] is False
+
+
+def test_no_changes_no_lines():
+    state = {"clocks": [{"id": "c1", "label": "x", "filled": 1, "size": 4}]}
+    assert describe_changes(state, state) == []
+
+
+def test_cadence_counts_replies_back_to_the_last_pass():
+    # a1 had a pass; a2 and a2b are replies after it.
+    assert count_replies_since(MESSAGES, "a2", "a1") == 1
+    assert count_replies_since(MESSAGES, "u2", "a1") == 0
+    assert count_replies_since(MESSAGES, "a2", None) == 2
+
+
+def test_portraits_are_wanted_for_new_faces_on_stage_only():
+    state = {
+        "npcs": [
+            {"id": "n1", "name": "Marek", "status": "on_stage", "look": "grey coat"},
+            {"id": "n2", "name": "Ivo", "status": "planned", "look": "tall"},
+            {"id": "n3", "name": "Nell", "status": "on_stage", "look": ""},
+            {"id": "n4", "name": "Rook", "status": "on_stage", "look": "bald"},
+        ]
+    }
+    # n4's portrait was drawn for someone else who had that id on another branch.
+    needed = npcs_needing_portraits(state, {"n4": "Someone else"})
+    assert [npc["id"] for npc in needed] == ["n1", "n4"]
+    assert npcs_needing_portraits(state, {"n1": "Marek", "n4": "Rook"}) == []
+
+
+def test_scene_npcs_carry_ready_portraits_only():
+    state = {
+        "npcs": [
+            {"id": "n1", "name": "Marek", "status": "on_stage", "card": "a nephew", "look": "grey coat"},
+            {"id": "n2", "name": "Ivo", "status": "on_stage", "look": "tall"},
+            {"id": "n3", "name": "Nell", "status": "off_stage", "look": "red scarf"},
+        ]
+    }
+    portraits = {
+        "n1": {"name": "Marek", "status": "ready", "file_id": "f1"},
+        "n2": {"name": "Ivo", "status": "running", "file_id": ""},
+    }
+    scene = scene_npcs(state, portraits)
+    assert [(n["name"], n["file_id"]) for n in scene] == [("Marek", "f1"), ("Ivo", "")]
+    assert scene[0]["look"] == "grey coat"
+
+
+def test_table_talk_answer_is_split_from_the_plan():
+    raw = (
+        "<gm_reply>\nGood idea, but not yet: the betrayal needs room first.\n</gm_reply>\n"
+        "<gm_reasoning>They want a rival.</gm_reasoning>\n"
+        '<gm_plan>{"update": {"player_requests": [{"text": "a rival"}]}, "note": "Marek: watch Alex."}</gm_plan>'
+    )
+    answer, rest = parse_gm_talk(raw)
+    assert answer == "Good idea, but not yet: the betrayal needs room first."
+    reasoning, plan = parse_gm_reply(rest)
+    assert reasoning == "They want a rival."
+    assert "Good idea" not in reasoning
+    assert apply_plan(None, plan)["player_requests"] == [{"text": "a rival", "id": "r1"}]
+
+
+def test_prompt_task_follows_the_kind_of_pass():
+    base = dict(
+        characters=[],
+        player_character_id="",
+        config={},
+        chat_instructions="",
+        last_note="Sam: hold firm.",
+        conversation=[],
+    )
+    talk = build_gm_messages(
+        **base,
+        state={"premise": "x"},
+        kind="table_talk",
+        talk="Can Sam's brother come back?",
+        talk_history=[{"player": "Where is this going?", "gm": "Somewhere dark."}],
+    )
+    assert "<gm_reply>" in talk[0]["content"]
+    assert "Can Sam's brother come back?" in talk[1]["content"]
+    assert "[You]\nSomewhere dark." in talk[1]["content"]
+
+    reroll = build_gm_messages(**base, state={"premise": "x"}, kind="reroll", rejected_note="Sam: hold firm.")
+    assert "rerolled" in reroll[1]["content"]
+    assert "<gm_reply>" not in reroll[0]["content"]
+
+    consult = build_gm_messages(**base, state={"premise": "x"}, kind="consult")
+    assert "take another look" in consult[1]["content"]
+
+    first_talk = build_gm_messages(**base, state=None, kind="table_talk", talk="hello")
+    assert "session zero" in first_talk[1]["content"]

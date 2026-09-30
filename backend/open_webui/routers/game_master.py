@@ -10,7 +10,10 @@ from open_webui.models.game_master import GameMaster, normalize_config
 from open_webui.utils.auth import get_verified_user
 from open_webui.utils.game_master import (
     find_state_entry_id,
+    get_scene_npcs,
     is_running,
+    queue_npc_portrait,
+    run_gm_pass,
     schedule_gm_pass,
 )
 
@@ -51,6 +54,9 @@ def _entry_view(entry) -> Optional[dict]:
         "id": entry.id,
         "message_id": entry.message_id,
         "kind": entry.kind,
+        "prior_id": entry.prior_id,
+        "user_message": entry.user_message,
+        "gm_reply": entry.gm_reply,
         "reasoning": entry.reasoning,
         "model_reasoning": entry.model_reasoning,
         "observations": entry.observations,
@@ -77,6 +83,7 @@ def _status(user, chat_id: str, chat) -> dict:
     if latest and latest["error"] and (not current or latest["created_at"] > current.created_at):
         failed = GameMaster.get_entry(user.id, latest["id"])
         last_error = {"error": failed.error, "created_at": failed.created_at} if failed else None
+    portraits = [p.model_dump() for p in GameMaster.get_portraits(user.id, chat_id)]
     return {
         "enabled": bool(session and session.enabled),
         "config": session.config if session else normalize_config({}),
@@ -84,6 +91,11 @@ def _status(user, chat_id: str, chat) -> dict:
         "current": _entry_view(current),
         "last_error": last_error,
         "entries": len(index),
+        "portraits": portraits,
+        "talk": [
+            {"id": t.id, "player": t.user_message, "gm": t.gm_reply, "created_at": t.created_at}
+            for t in GameMaster.get_table_talk(user.id, chat_id, 20)
+        ],
     }
 
 
@@ -98,6 +110,8 @@ class GameMasterForm(BaseModel):
     agenda: Optional[str] = Field(default=None, max_length=4000)
     intensity: Optional[Literal["light", "firm", "ruthless"]] = None
     player_character_id: Optional[str] = Field(default=None, max_length=200)
+    cadence: Optional[Literal[1, 2, 3]] = None
+    auto_portraits: Optional[bool] = None
 
 
 @router.post("/chats/{chat_id}")
@@ -157,3 +171,111 @@ async def get_game_master_journal(
     _chat_or_404(chat_id, user)
     limit = max(1, min(limit, 500))
     return [_entry_view(entry) for entry in GameMaster.get_journal(user.id, chat_id, limit)]
+
+
+@router.get("/chats/{chat_id}/index")
+async def get_game_master_index(chat_id: str, user=Depends(get_verified_user)):
+    """Which messages have GM passes, for the markers on steered replies."""
+    _chat_or_404(chat_id, user)
+    session = GameMaster.get_session(user.id, chat_id)
+    return {
+        "enabled": bool(session and session.enabled),
+        "entries": GameMaster.get_entry_index(user.id, chat_id),
+    }
+
+
+class TalkForm(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+
+
+@router.post("/chats/{chat_id}/talk")
+async def talk_to_game_master(
+    request: Request,
+    chat_id: str,
+    form_data: TalkForm,
+    user=Depends(get_verified_user),
+):
+    """Table talk: speak to the GM out of character. Waits for its answer."""
+    chat = _chat_or_404(chat_id, user)
+    session = GameMaster.get_session(user.id, chat_id)
+    if not session or not session.enabled:
+        raise HTTPException(status_code=400, detail="The Game Master is off for this chat")
+    leaf, messages = _leaf(chat)
+    entry = await run_gm_pass(
+        request,
+        user,
+        chat_id,
+        leaf,
+        _chat_model(chat, leaf, messages),
+        kind="table_talk",
+        talk=form_data.message.strip(),
+    )
+    if not entry or not entry.gm_reply:
+        raise HTTPException(
+            status_code=502, detail="The Game Master did not answer. Check the transcript."
+        )
+    return {"reply": entry.gm_reply, "status": _status(user, chat_id, chat)}
+
+
+@router.post("/chats/{chat_id}/reroll")
+async def reroll_game_master(
+    request: Request,
+    chat_id: str,
+    user=Depends(get_verified_user),
+):
+    """Replace the direction in force with a fresh take from the same starting point."""
+    chat = _chat_or_404(chat_id, user)
+    leaf, messages = _leaf(chat)
+    index = GameMaster.get_entry_index(user.id, chat_id)
+    current_id = find_state_entry_id(index, messages, leaf, inclusive=True)
+    current = GameMaster.get_entry(user.id, current_id) if current_id else None
+    if not current or current.kind == "table_talk":
+        raise HTTPException(status_code=400, detail="There is no direction to reroll")
+    if not schedule_gm_pass(
+        request,
+        user,
+        chat_id,
+        current.message_id or None,
+        _chat_model(chat, leaf, messages),
+        kind="reroll",
+        prior_override=current.prior_id,
+        rejected_note=current.note,
+    ):
+        raise HTTPException(status_code=400, detail="The Game Master is off for this chat")
+    return _status(user, chat_id, chat)
+
+
+@router.post("/chats/{chat_id}/npcs/{npc_id}/portrait")
+async def regenerate_npc_portrait(
+    request: Request,
+    chat_id: str,
+    npc_id: str,
+    user=Depends(get_verified_user),
+):
+    """Draw an NPC again with a new seed, from their look in the current plan."""
+    chat = _chat_or_404(chat_id, user)
+    leaf, messages = _leaf(chat)
+    index = GameMaster.get_entry_index(user.id, chat_id)
+    current_id = find_state_entry_id(index, messages, leaf, inclusive=True)
+    current = GameMaster.get_entry(user.id, current_id) if current_id else None
+    npc = next(
+        (n for n in ((current.state or {}).get("npcs") or []) if n.get("id") == npc_id),
+        None,
+    ) if current else None
+    if not npc:
+        raise HTTPException(status_code=404, detail="No such NPC in the current plan")
+    if not await queue_npc_portrait(request, user, chat_id, npc):
+        raise HTTPException(
+            status_code=400,
+            detail="Portraits need video generation to be enabled, and the NPC needs a look.",
+        )
+    return _status(user, chat_id, chat)
+
+
+@router.get("/chats/{chat_id}/scene-npcs")
+async def get_game_master_scene_npcs(
+    chat_id: str, message_id: Optional[str] = None, user=Depends(get_verified_user)
+):
+    """NPCs on stage at a message, with portrait file ids, for the Video Studio."""
+    _chat_or_404(chat_id, user)
+    return get_scene_npcs(user.id, chat_id, message_id)

@@ -7,7 +7,7 @@ import mimetypes
 import random
 import time
 from typing import Literal, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
@@ -624,17 +624,24 @@ def _release_job_inputs(job: dict) -> None:
     job.pop("request", None)
     job.pop("form_data", None)
     job.pop("user", None)
+    job.pop("runner", None)
 
 
 async def _run_video_generation_job(job_id: str) -> None:
     job = VIDEO_GENERATION_JOBS[job_id]
-    request = job["request"]
-    form_data = job["form_data"]
-    user = job["user"]
     job["status"] = "running"
     job["started_at"] = time.time()
     job["updated_at"] = time.time()
     try:
+        # Other ComfyUI work (Game Master portraits) shares this queue so it never
+        # lands on the GPU alongside a video; it brings its own runner.
+        if job.get("runner"):
+            job["result"] = await job["runner"]()
+            job["status"] = "completed"
+            return
+        request = job["request"]
+        form_data = job["form_data"]
+        user = job["user"]
         regeneration_prompt = _resolve_regeneration_prompt(form_data, user)
         if regeneration_prompt:
             form_data.prompt = regeneration_prompt
@@ -682,6 +689,31 @@ def _ensure_video_generation_worker() -> None:
         VIDEO_GENERATION_WORKER.add_done_callback(VIDEO_GENERATION_TASKS.discard)
 
 
+async def enqueue_comfyui_job(user_id: str, kind: str, label: str, runner) -> str:
+    """Queue non-video ComfyUI work behind any videos already waiting.
+
+    runner is an async callable taking no arguments. These jobs never appear in the
+    studio's job list: it adopts every listed job as a video it should show.
+    """
+    _prune_video_jobs()
+    job_id = str(uuid4())
+    now = time.time()
+    VIDEO_GENERATION_JOBS[job_id] = {
+        "user_id": user_id,
+        "kind": kind,
+        "status": "queued",
+        "created_at": now,
+        "updated_at": now,
+        "result": None,
+        "error": None,
+        "label": label[:120],
+        "runner": runner,
+    }
+    _ensure_video_generation_worker()
+    await VIDEO_GENERATION_QUEUE.put(job_id)
+    return job_id
+
+
 @router.get("/generations/jobs")
 async def list_video_generation_jobs(
     request: Request,
@@ -693,7 +725,9 @@ async def list_video_generation_jobs(
     return [
         _public_video_job(job_id, job)
         for job_id, job in VIDEO_GENERATION_JOBS.items()
-        if job["user_id"] == user.id and job["status"] in VIDEO_JOB_ACTIVE_STATES
+        if job["user_id"] == user.id
+        and job["status"] in VIDEO_JOB_ACTIVE_STATES
+        and job.get("kind", "video") == "video"
     ]
 
 

@@ -18,6 +18,8 @@
 		chatId,
 		pendingChatCharacterIds,
 		gameMasterVersion,
+		gameMasterIndex,
+		gameMasterTalkRequest,
 		pendingGameMaster,
 		hiddenChatIds,
 		chats,
@@ -112,7 +114,8 @@
 	import { getBanners } from '$lib/apis/configs';
 	import { attachVideoCharacter } from '$lib/apis/videos';
 	import { syncCharacterState } from '$lib/utils/characterState';
-	import { updateGameMaster } from '$lib/apis/gamemaster';
+	import { getGameMasterIndex, updateGameMaster } from '$lib/apis/gamemaster';
+	import GameMasterTranscript from '$lib/components/chat/Controls/GameMasterTranscript.svelte';
 
 	export let chatIdProp = '';
 
@@ -1825,6 +1828,13 @@
 	const submitPrompt = async (userPrompt, { _raw = false } = {}) => {
 		console.log('submitPrompt', userPrompt, $chatId);
 
+		const gmCommand =
+			typeof userPrompt === 'string' ? userPrompt.trim().match(/^\/gm(?:\s+([\s\S]*))?$/i) : null;
+		if (gmCommand) {
+			await sendToGameMaster(gmCommand[1] ?? '');
+			return;
+		}
+
 		const _selectedModels = selectedModels.map((modelId) =>
 			$models.map((m) => m.id).includes(modelId) ? modelId : ''
 		);
@@ -2654,6 +2664,45 @@
 		}
 	};
 
+	// Which replies the Game Master steered, for their markers. Reloaded when the chat
+	// changes and whenever the GM reports a pass.
+	let gameMasterIndexKey = '';
+	const loadGameMasterIndex = async (id: string, version: number) => {
+		const key = `${id}:${version}`;
+		if (key === gameMasterIndexKey) return;
+		gameMasterIndexKey = key;
+		if (!id || id.startsWith('local:')) {
+			gameMasterIndex.set(null);
+			return;
+		}
+		try {
+			const index = await getGameMasterIndex(localStorage.token, id);
+			if (gameMasterIndexKey === key) gameMasterIndex.set({ chatId: id, ...index });
+		} catch (error) {
+			console.error(error);
+		}
+	};
+	$: void loadGameMasterIndex($chatId, $gameMasterVersion);
+
+	// "/gm ..." talks to the Game Master out of character instead of sending a message.
+	// It never enters the conversation; the Game Master panel sends it and shows the answer.
+	const sendToGameMaster = async (text: string): Promise<boolean> => {
+		const id = $chatId;
+		if (!id || id.startsWith('local:') || !$gameMasterIndex?.enabled) {
+			toast.error($i18n.t('Switch on the Game Master in Chat Controls to talk to it.'));
+			return false;
+		}
+		if (!text.trim()) {
+			await showControls.set(true);
+			return true;
+		}
+		messageInput?.setText('');
+		prompt = '';
+		await showControls.set(true);
+		gameMasterTalkRequest.set(text.trim());
+		return true;
+	};
+
 	// Game Master settings chosen before the first message. Switching it on here spawns
 	// the GM alongside the new chat; its first pass runs while the first reply streams.
 	const flushPendingGameMaster = async (targetChatId) => {
@@ -2804,6 +2853,8 @@
 </svelte:head>
 
 <audio id="audioElement" src="" style="display: none;"></audio>
+
+<GameMasterTranscript chatId={$chatId} {history} />
 
 <EventConfirmDialog
 	bind:show={showEventConfirmation}

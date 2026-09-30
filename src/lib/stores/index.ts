@@ -65,7 +65,26 @@ export const pendingGameMaster = writable<{
 	intensity: 'light' | 'firm' | 'ruthless';
 	agenda: string;
 	player_character_id: string;
+	cadence: 1 | 2 | 3;
+	auto_portraits: boolean;
 } | null>(null);
+// Which messages have GM passes, for the "steered" markers on replies.
+export const gameMasterIndex = writable<{
+	chatId: string;
+	enabled: boolean;
+	entries: {
+		id: string;
+		message_id: string;
+		created_at: number;
+		error: string;
+		has_state: boolean;
+		kind: string;
+	}[];
+} | null>(null);
+// Open the GM transcript, optionally scrolled to one entry.
+export const gameMasterTranscript = writable<{ entryId?: string } | null>(null);
+// A "/gm ..." message from the chat box, for the Game Master panel to send.
+export const gameMasterTalkRequest = writable<string | null>(null);
 export const chatTitle = writable('');
 
 export const channels = writable([]);

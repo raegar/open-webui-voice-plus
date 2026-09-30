@@ -18,13 +18,18 @@ from uuid import uuid4
 
 from open_webui.internal.db import Base, engine, get_db
 from pydantic import BaseModel
-from sqlalchemy import BigInteger, Boolean, Column, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, Column, Integer, String, Text, inspect, text
 
 INTENSITIES = ("light", "firm", "ruthless")
+CADENCES = (1, 2, 3)
 DEFAULT_CONFIG = {
     "agenda": "",
     "intensity": "firm",
     "player_character_id": "",
+    # Run a turn pass after every Nth reply; table talk and Consult always run.
+    "cadence": 1,
+    # Generate a portrait when an NPC first comes on stage.
+    "auto_portraits": True,
 }
 
 
@@ -48,8 +53,14 @@ class GMJournal(Base):
     user_id = Column(String, index=True, nullable=False)
     # The message this pass reacted to; "" is the root, before any message.
     message_id = Column(String, index=True, nullable=False, default="")
-    # setup | turn | consult
+    # setup | turn | consult | reroll | table_talk
     kind = Column(String, nullable=False, default="turn")
+    # The entry whose state this pass built on, or "" for a fresh campaign. A reroll
+    # starts again from the same prior.
+    prior_id = Column(String, nullable=False, default="")
+    # Table talk: what the player said out of character, and what the GM answered.
+    user_message = Column(Text, nullable=False, default="")
+    gm_reply = Column(Text, nullable=False, default="")
     reasoning = Column(Text, nullable=False, default="")
     # A reasoning model's own thinking, when the provider returns it separately.
     model_reasoning = Column(Text, nullable=False, default="")
@@ -77,6 +88,9 @@ class GMJournalModel(BaseModel):
     chat_id: str
     message_id: str
     kind: str
+    prior_id: str
+    user_message: str
+    gm_reply: str
     reasoning: str
     model_reasoning: str
     observations: list
@@ -102,6 +116,9 @@ def normalize_config(config: Any) -> dict:
     merged = {**DEFAULT_CONFIG, **(config if isinstance(config, dict) else {})}
     if merged["intensity"] not in INTENSITIES:
         merged["intensity"] = DEFAULT_CONFIG["intensity"]
+    if merged["cadence"] not in CADENCES:
+        merged["cadence"] = DEFAULT_CONFIG["cadence"]
+    merged["auto_portraits"] = merged["auto_portraits"] is not False
     for key in ("agenda", "player_character_id"):
         if not isinstance(merged[key], str):
             merged[key] = ""
@@ -123,6 +140,9 @@ def _journal_model(row: GMJournal) -> GMJournalModel:
         chat_id=row.chat_id,
         message_id=row.message_id or "",
         kind=row.kind,
+        prior_id=row.prior_id or "",
+        user_message=row.user_message or "",
+        gm_reply=row.gm_reply or "",
         reasoning=row.reasoning or "",
         model_reasoning=row.model_reasoning or "",
         observations=_loads(row.observations, []),
@@ -181,6 +201,9 @@ class GameMasterTable:
                 user_id=user_id,
                 message_id=fields.get("message_id") or "",
                 kind=fields.get("kind", "turn"),
+                prior_id=fields.get("prior_id") or "",
+                user_message=fields.get("user_message", ""),
+                gm_reply=fields.get("gm_reply", ""),
                 reasoning=fields.get("reasoning", ""),
                 model_reasoning=fields.get("model_reasoning", ""),
                 observations=json.dumps(fields.get("observations") or []),
@@ -208,6 +231,7 @@ class GameMasterTable:
                     GMJournal.created_at,
                     GMJournal.error,
                     GMJournal.state != "",
+                    GMJournal.kind,
                 )
                 .filter_by(chat_id=chat_id, user_id=user_id)
                 .order_by(GMJournal.created_at)
@@ -220,6 +244,7 @@ class GameMasterTable:
                     "created_at": row[2],
                     "error": row[3] or "",
                     "has_state": bool(row[4]),
+                    "kind": row[5],
                 }
                 for row in rows
             ]
@@ -242,8 +267,129 @@ class GameMasterTable:
             )
             return [_journal_model(row) for row in rows]
 
+    def get_table_talk(self, user_id: str, chat_id: str, limit: int = 8) -> list[GMJournalModel]:
+        """The latest out-of-character exchanges, oldest first."""
+        with get_db() as db:
+            rows = (
+                db.query(GMJournal)
+                .filter_by(chat_id=chat_id, user_id=user_id, kind="table_talk")
+                .filter(GMJournal.gm_reply != "")
+                .order_by(GMJournal.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+            return [_journal_model(row) for row in reversed(rows)]
+
+    # Portraits ----------------------------------------------------------------
+
+    def get_portraits(self, user_id: str, chat_id: str) -> list["GMPortraitModel"]:
+        with get_db() as db:
+            rows = db.query(GMPortrait).filter_by(chat_id=chat_id, user_id=user_id).all()
+            return [_portrait_model(row) for row in rows]
+
+    def get_portrait(
+        self, user_id: str, chat_id: str, npc_id: str
+    ) -> Optional["GMPortraitModel"]:
+        with get_db() as db:
+            row = (
+                db.query(GMPortrait)
+                .filter_by(chat_id=chat_id, user_id=user_id, npc_id=npc_id)
+                .first()
+            )
+            return _portrait_model(row) if row else None
+
+    def set_portrait(
+        self, user_id: str, chat_id: str, npc_id: str, **fields
+    ) -> "GMPortraitModel":
+        now = int(time.time())
+        with get_db() as db:
+            row = (
+                db.query(GMPortrait)
+                .filter_by(chat_id=chat_id, user_id=user_id, npc_id=npc_id)
+                .first()
+            )
+            if not row:
+                row = GMPortrait(
+                    id=str(uuid4()),
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    npc_id=npc_id,
+                    created_at=now,
+                )
+                db.add(row)
+            for key in ("name", "look", "status", "file_id", "seed", "error"):
+                if fields.get(key) is not None:
+                    setattr(row, key, str(fields[key]))
+            row.updated_at = now
+            db.commit()
+            db.refresh(row)
+            return _portrait_model(row)
+
+
+class GMPortrait(Base):
+    """One NPC's portrait in one chat. Regenerating replaces it in place."""
+
+    __tablename__ = "gm_portrait"
+
+    id = Column(String, primary_key=True)
+    chat_id = Column(String, index=True, nullable=False)
+    user_id = Column(String, index=True, nullable=False)
+    npc_id = Column(String, nullable=False)
+    # The name and look it was drawn from, so a changed NPC can be told apart.
+    name = Column(Text, nullable=False, default="")
+    look = Column(Text, nullable=False, default="")
+    # queued | running | ready | failed
+    status = Column(String, nullable=False, default="queued")
+    file_id = Column(String, nullable=False, default="")
+    seed = Column(String, nullable=False, default="")
+    error = Column(Text, nullable=False, default="")
+    created_at = Column(BigInteger, nullable=False)
+    updated_at = Column(BigInteger, nullable=False)
+
+
+class GMPortraitModel(BaseModel):
+    npc_id: str
+    name: str
+    look: str
+    status: str
+    file_id: str
+    seed: str
+    error: str
+    updated_at: int
+
+
+def _portrait_model(row: GMPortrait) -> GMPortraitModel:
+    return GMPortraitModel(
+        npc_id=row.npc_id,
+        name=row.name or "",
+        look=row.look or "",
+        status=row.status or "queued",
+        file_id=row.file_id or "",
+        seed=row.seed or "",
+        error=row.error or "",
+        updated_at=row.updated_at or 0,
+    )
+
+
+def _add_missing_columns() -> None:
+    """Columns added after gm_journal first shipped; create() skips existing tables."""
+    added = {
+        "prior_id": "VARCHAR NOT NULL DEFAULT ''",
+        "user_message": "TEXT NOT NULL DEFAULT ''",
+        "gm_reply": "TEXT NOT NULL DEFAULT ''",
+    }
+    existing = {c["name"] for c in inspect(engine).get_columns("gm_journal")}
+    with engine.begin() as connection:
+        for name, definition in added.items():
+            if name not in existing:
+                connection.execute(
+                    text(f"ALTER TABLE gm_journal ADD COLUMN {name} {definition}")
+                )
+
 
 GameMaster = GameMasterTable()
 
 GMSession.__table__.create(bind=engine, checkfirst=True)
 GMJournal.__table__.create(bind=engine, checkfirst=True)
+GMPortrait.__table__.create(bind=engine, checkfirst=True)
+_add_missing_columns()

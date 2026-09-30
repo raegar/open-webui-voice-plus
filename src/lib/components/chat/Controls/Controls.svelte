@@ -12,7 +12,7 @@
 	import GameMaster from '$lib/components/chat/Controls/GameMaster.svelte';
 
 	import { toast } from 'svelte-sonner';
-	import { config, privateChatIds, user, settings } from '$lib/stores';
+	import { config, gameMasterTalkRequest, privateChatIds, user, settings } from '$lib/stores';
 	import { markChatPrivate } from '$lib/utils/privacy';
 	export let models = [];
 	export let chatFiles = [];
@@ -37,6 +37,8 @@
 	let showValves = getOpen('valves', false);
 	let showChatInstructions = getOpen('chatInstructions');
 	let showGameMaster = getOpen('gameMaster', false);
+	// A "/gm ..." from the chat box needs the Game Master section open to be sent.
+	$: if ($gameMasterTalkRequest !== null) showGameMaster = true;
 	let showSystemPrompt = getOpen('systemPrompt');
 	let showAdvancedParams = getOpen('advancedParams');
 

@@ -32,12 +32,15 @@ MAX_PROFILE_CHARS = 1500
 MAX_TOKENS = 8000
 
 # Bounds on the GM's state, so a runaway model cannot grow it without limit.
-LIMITS = {"npcs": 20, "threads": 10, "clocks": 8, "secrets": 15}
+LIMITS = {"npcs": 20, "threads": 10, "clocks": 8, "secrets": 15, "player_requests": 12}
 MAX_CHARACTERS = 12
 MAX_STANCES = 8
 MAX_DIRECTIVES = 12
 MAX_STRING = 1500
-LIST_KEYS = ("npcs", "threads", "clocks", "secrets")
+# Id prefix for each list in the state; the order is the order they are merged.
+PREFIXES = {"npcs": "n", "threads": "t", "clocks": "c", "secrets": "s", "player_requests": "r"}
+LIST_KEYS = tuple(PREFIXES)
+TALK_HISTORY = 8
 NPC_STATUSES = ("planned", "on_stage", "off_stage", "gone")
 
 INTENSITY = {
@@ -75,6 +78,7 @@ Principles:
 10. Secrets. A character's own secrets can go in their briefing, because an actor must know them to play them. A twist no character knows stays with you until the story earns the reveal, though you can hint at it.
 11. Respect the player's agenda, their directives and the chat instructions. Make the story harder, never into something the player said they do not want.
 12. Pace yourself. Not every turn needs a new event. Some turns the right note is simply: hold your ground.
+13. Work the player's requests (player_requests) into the story over the coming scenes, in ways that fit what is already happening. Mark one in_progress once you have started on it and done once it has landed.
 
 Intensity: {intensity}
 
@@ -103,10 +107,11 @@ The JSON:
     "threads": [{{ "id": "t1", "title": "...", "status": "seeded | rising | climax | resolved", "next_beat": "...", "gm_only": false }}],
     "clocks": [{{ "id": "c1", "label": "...", "filled": 0, "size": 6, "on_full": "what happens when it fills" }}],
     "secrets": [{{ "id": "s1", "text": "...", "known_by": ["names"], "reveal": "when or how" }}],
+    "player_requests": [{{ "id": "r1", "text": "what the player asked for", "status": "planned | in_progress | done | declined", "plan": "how you will work it in" }}],
     "player_directives": ["binding out-of-character instructions from the player"],
     "tension": {{ "current": 0, "target": 0 }}
   }},
-  "remove": {{ "npcs": ["ids"], "threads": ["ids"], "clocks": ["ids"], "secrets": ["ids"], "player_directives": ["exact text"] }},
+  "remove": {{ "npcs": ["ids"], "threads": ["ids"], "clocks": ["ids"], "secrets": ["ids"], "player_requests": ["ids"], "player_directives": ["exact text"] }},
   "note": "the director's note for the next reply"
 }}
 
@@ -133,6 +138,40 @@ TURN_TASK = (
     "world should answer? Then update your plan and write the note for the next "
     "reply."
 )
+CONSULT_TASK = (
+    "The player asked you to take another look at the story as it stands, perhaps "
+    "after changing your settings or their agenda. Check your plan against the "
+    "conversation and the current settings, adjust it, and write a fresh note for the "
+    "next reply. Do not record again any caves you have already recorded."
+)
+REROLL_TASK = (
+    "The player rerolled your last direction: they want a different take on this "
+    "moment. Plan again from the same starting point and write a note that goes "
+    "somewhere meaningfully different, still true to the characters.\n"
+    "The direction they rejected:\n{rejected}"
+)
+TALK_TASK = (
+    "The player is talking to you out of character. Answer them, then update your "
+    "plan and rewrite the note for the next reply wherever their words change it."
+)
+
+TALK_ADDENDUM = """
+
+## Table talk
+Right now the player is talking to you out of character, across the table, as they would to a DM. This is the one place you speak to them directly.
+
+Begin your reply with this block, before your reasoning and plan:
+<gm_reply>
+Your answer to the player, in your own voice as their game master: direct, friendly and opinionated. Plain prose, usually a few sentences.
+</gm_reply>
+
+At the table:
+- Answer questions about direction honestly, but keep your secrets and planned twists unless the player explicitly asks to be spoiled.
+- A suggestion is a request, not an order. Take it, adapt it to what you already have planned, or push back, say why, and offer something better. You are a DM with opinions, not an assistant who agrees to everything.
+- A suggestion you take or adapt goes into player_requests with your plan for it, to be worked in over the coming scenes rather than crammed into the next reply.
+- A clear instruction about the game ("stop doing that", "no violence in this chat", "tone it down") is binding: record it in player_directives and follow it.
+- A correction to your facts ("Sam doesn't know about the letter yet") is binding: fix your plan.
+- Then rewrite the note for the next reply so the change shows at once where it should."""
 
 NOTES_HEADER = (
     "Private direction from the game master for your next reply. Play it through the "
@@ -294,7 +333,7 @@ def apply_plan(state: Optional[dict], plan: dict) -> dict:
     if characters:
         result["characters"] = dict(list(characters.items())[-MAX_CHARACTERS:])
 
-    for key, prefix in zip(LIST_KEYS, ("n", "t", "c", "s")):
+    for key, prefix in PREFIXES.items():
         items = result.get(key) if isinstance(result.get(key), list) else []
         if key in update:
             items = _merge_items(items, update.get(key), prefix, LIMITS[key])
@@ -375,6 +414,21 @@ def _loads_lenient(text: str) -> Optional[dict]:
     return None
 
 
+def parse_gm_talk(raw: str) -> tuple[str, str]:
+    """Split off the table-talk answer. Returns (answer to the player, the rest)."""
+    raw = raw or ""
+    match = re.search(
+        r"<gm_reply>\s*(.*?)\s*(?:</gm_reply>|(?=<gm_reasoning>)|(?=<gm_plan>)|$)",
+        raw,
+        flags=re.S | re.I,
+    )
+    if not match:
+        return "", raw
+    rest = raw[: match.start()] + raw[match.end() :]
+    rest = re.sub(r"</gm_reply>", "", rest, flags=re.I)
+    return match.group(1).strip(), rest
+
+
 def parse_gm_reply(raw: str) -> tuple[str, Optional[dict]]:
     """Split a GM reply into (reasoning, plan). plan is None when unparseable."""
     raw = raw or ""
@@ -392,6 +446,202 @@ def parse_gm_reply(raw: str) -> tuple[str, Optional[dict]]:
         if plan is not None and ("note" in plan or "update" in plan):
             return reasoning, plan
     return reasoning, None
+
+
+def _by_id(items: Any) -> dict:
+    if not isinstance(items, list):
+        return {}
+    return {item["id"]: item for item in items if isinstance(item, dict) and item.get("id")}
+
+
+def describe_changes(before: Optional[dict], after: Optional[dict]) -> list[dict]:
+    """What a pass changed, as readable lines for the transcript.
+
+    Each line is {"text", "spoiler"}. Spoiler lines (secrets, GM-only threads, NPCs
+    still waiting in the wings, drives and the premise) stay covered until clicked.
+    """
+    before, after = before or {}, after or {}
+    lines: list[dict] = []
+
+    def add(line: str, spoiler: bool = False) -> None:
+        lines.append({"text": line[:600], "spoiler": spoiler})
+
+    if _text(after.get("premise")) and after.get("premise") != before.get("premise"):
+        add(f"Premise: {after['premise']}", True)
+
+    old_characters = before.get("characters") or {}
+    for name, character in (after.get("characters") or {}).items():
+        if not isinstance(character, dict):
+            continue
+        old = old_characters.get(name) or {}
+        for key, label in (
+            ("want", "wants"),
+            ("need", "needs"),
+            ("fear", "fears"),
+            ("line", "won't"),
+            ("voice_notes", "voice"),
+        ):
+            if _text(character.get(key)) and character.get(key) != old.get(key):
+                add(f"{name} {label}: {character[key]}", True)
+        old_stance = old.get("stance") or {}
+        new_stance = character.get("stance") or {}
+        for issue, stance in new_stance.items():
+            if not isinstance(stance, dict) or stance == old_stance.get(issue):
+                continue
+            position = _text(stance.get("position"))
+            previous = _text((old_stance.get(issue) or {}).get("position"))
+            line = f"{name} on {issue}: " + (
+                f"{previous} → {position}" if previous and previous != position else position
+            )
+            if _text(stance.get("price")):
+                line += f" (moves only if: {stance['price']})"
+            add(line)
+        for issue in old_stance:
+            if issue not in new_stance:
+                add(f"{name} on {issue}: settled")
+
+    old_npcs = _by_id(before.get("npcs"))
+    for npc_id, npc in _by_id(after.get("npcs")).items():
+        name, status = _text(npc.get("name")) or npc_id, npc.get("status", "planned")
+        old = old_npcs.get(npc_id)
+        if not old:
+            card = f": {npc['card']}" if _text(npc.get("card")) else ""
+            if status == "planned":
+                add(f"New NPC waiting in the wings: {name}{card}", True)
+            else:
+                add(f"NPC enters: {name}{card}")
+            continue
+        if old.get("status") != status:
+            add(
+                f"{name}: {str(old.get('status', 'planned')).replace('_', ' ')} → "
+                f"{str(status).replace('_', ' ')}",
+                status == "planned",
+            )
+        if _text(npc.get("look")) and npc.get("look") != old.get("look") and old.get("look"):
+            add(f"{name} now looks: {npc['look']}")
+    for npc_id, npc in old_npcs.items():
+        if npc_id not in _by_id(after.get("npcs")):
+            add(f"NPC dropped: {_text(npc.get('name')) or npc_id}", npc.get("status") == "planned")
+
+    old_threads = _by_id(before.get("threads"))
+    for thread_id, thread in _by_id(after.get("threads")).items():
+        title = _text(thread.get("title")) or thread_id
+        hidden = bool(thread.get("gm_only"))
+        old = old_threads.get(thread_id)
+        if not old:
+            add(f"New thread: {title} ({thread.get('status', 'seeded')})", hidden)
+            continue
+        if old.get("status") != thread.get("status"):
+            add(f"Thread '{title}': {old.get('status')} → {thread.get('status')}", hidden)
+        if _text(thread.get("next_beat")) and thread.get("next_beat") != old.get("next_beat"):
+            add(f"Next beat for '{title}': {thread['next_beat']}", True)
+
+    old_clocks = _by_id(before.get("clocks"))
+    for clock_id, clock in _by_id(after.get("clocks")).items():
+        label = _text(clock.get("label")) or clock_id
+        filled, size = clock.get("filled", 0), clock.get("size", 6)
+        old = old_clocks.get(clock_id)
+        if not old:
+            add(f"New clock: {label} ({filled} of {size})")
+        elif old.get("filled") != filled:
+            add(f"{label}: {old.get('filled', 0)} → {filled} of {size}")
+        if filled >= size and (not old or old.get("filled", 0) < size):
+            add(f"{label} is full: {clock.get('on_full', 'its consequence happens')}")
+
+    old_secrets = _by_id(before.get("secrets"))
+    for secret_id, secret in _by_id(after.get("secrets")).items():
+        old = old_secrets.get(secret_id)
+        if not old:
+            add(f"Secret: {secret.get('text', '')}", True)
+        elif old.get("known_by") != secret.get("known_by"):
+            known = ", ".join(secret.get("known_by") or []) or "nobody"
+            add(f"Secret now known by {known}: {secret.get('text', '')}", True)
+
+    old_requests = _by_id(before.get("player_requests"))
+    for request_id, request in _by_id(after.get("player_requests")).items():
+        old = old_requests.get(request_id)
+        wording = _text(request.get("text")) or request_id
+        if not old:
+            add(f"Your request: {wording} ({request.get('status', 'planned')})")
+        elif old.get("status") != request.get("status"):
+            add(f"Your request '{wording}': {old.get('status')} → {request.get('status')}")
+
+    old_directives = set(before.get("player_directives") or [])
+    new_directives = set(after.get("player_directives") or [])
+    for directive in sorted(new_directives - old_directives):
+        add(f"Your directive: {directive}")
+    for directive in sorted(old_directives - new_directives):
+        add(f"Directive lifted: {directive}")
+
+    old_tension, tension = before.get("tension") or {}, after.get("tension") or {}
+    if tension.get("current") is not None and tension.get("current") != old_tension.get("current"):
+        target = f" (aiming for {tension['target']})" if tension.get("target") is not None else ""
+        previous = old_tension.get("current")
+        add(
+            f"Tension: {previous} → {tension['current']}{target}"
+            if previous is not None
+            else f"Tension: {tension['current']}{target}"
+        )
+    return lines
+
+
+def count_replies_since(
+    messages_map: Optional[dict], start_id: Optional[str], stop_id: Optional[str]
+) -> int:
+    """Assistant replies from start_id (inclusive) back to stop_id (exclusive)."""
+    messages_map = messages_map or {}
+    count, current, seen = 0, start_id, set()
+    while current and current != stop_id and current not in seen:
+        seen.add(current)
+        message = messages_map.get(current) or {}
+        if message.get("role") == "assistant":
+            count += 1
+        current = message.get("parentId")
+    return count
+
+
+def npcs_needing_portraits(state: Optional[dict], portraits: dict) -> list[dict]:
+    """On-stage NPCs with a look and no portrait of that NPC yet.
+
+    portraits maps npc id to the name its portrait was drawn for. A different name
+    under the same id is a different NPC (ids are reused across branches).
+    """
+    needed = []
+    for npc in (state or {}).get("npcs", []):
+        if not isinstance(npc, dict) or npc.get("status") != "on_stage":
+            continue
+        if not _text(npc.get("look")) or not npc.get("id"):
+            continue
+        drawn_for = portraits.get(npc["id"])
+        if drawn_for is None or drawn_for != _text(npc.get("name")):
+            needed.append(npc)
+    return needed
+
+
+def scene_npcs(state: Optional[dict], portraits: dict) -> list[dict]:
+    """The NPCs on stage, with a ready portrait's file id where there is one.
+
+    portraits maps npc id to {"name", "status", "file_id"}.
+    """
+    scene = []
+    for npc in (state or {}).get("npcs", []):
+        if not isinstance(npc, dict) or npc.get("status") != "on_stage":
+            continue
+        name = _text(npc.get("name"))
+        if not name:
+            continue
+        portrait = portraits.get(npc.get("id")) or {}
+        ready = portrait.get("status") == "ready" and portrait.get("name") == name
+        scene.append(
+            {
+                "npc_id": npc.get("id", ""),
+                "name": name,
+                "card": _text(npc.get("card")),
+                "look": _text(npc.get("look")),
+                "file_id": portrait.get("file_id", "") if ready else "",
+            }
+        )
+    return scene
 
 
 def _profile(character: Any, key: str) -> str:
@@ -420,10 +670,19 @@ def build_gm_messages(
     state: Optional[dict],
     last_note: str,
     conversation: list[dict],
+    kind: str = "turn",
+    talk: str = "",
+    talk_history: Optional[list[dict]] = None,
+    rejected_note: str = "",
 ) -> list[dict]:
-    """The GM's system and user messages for one pass."""
+    """The GM's system and user messages for one pass.
+
+    talk_history holds earlier table-talk exchanges as {"player", "gm"} pairs.
+    """
     intensity = INTENSITY.get(config.get("intensity"), INTENSITY["firm"])
     system = SYSTEM_PROMPT.format(intensity=intensity)
+    if kind == "table_talk":
+        system += TALK_ADDENDUM
 
     roster, settings = [], []
     player_name = ""
@@ -486,7 +745,31 @@ def build_gm_messages(
         "## Conversation so far (most recent last)\n"
         + ("\n\n".join(transcript) if transcript else "(nothing yet: the story has not started)")
     )
-    sections.append("## Your task\n" + (TURN_TASK if state else SETUP_TASK))
+    if talk_history:
+        exchanges = [
+            f"[Player, out of character]\n{_text(item.get('player'))[:MAX_MESSAGE_CHARS]}\n"
+            f"[You]\n{_text(item.get('gm'))[:MAX_MESSAGE_CHARS]}"
+            for item in talk_history
+        ]
+        sections.append("## Table talk so far (most recent last)\n" + "\n\n".join(exchanges))
+
+    tasks = []
+    if kind == "table_talk":
+        sections.append(
+            "## The player says to you, out of character\n" + _text(talk)[:MAX_MESSAGE_CHARS]
+        )
+        tasks.append(TALK_TASK)
+        if not state:
+            tasks.append(SETUP_TASK)
+    elif not state:
+        tasks.append(SETUP_TASK)
+    elif kind == "consult":
+        tasks.append(CONSULT_TASK)
+    else:
+        tasks.append(TURN_TASK)
+    if kind == "reroll" and _text(rejected_note):
+        tasks.append(REROLL_TASK.format(rejected=rejected_note.strip()))
+    sections.append("## Your task\n" + "\n\n".join(tasks))
 
     return [
         {"role": "system", "content": system},
@@ -604,6 +887,9 @@ def inject_director_notes(
     return add_or_update_system_message(notes, messages, append=True)
 
 
+_UNSET = object()
+
+
 async def run_gm_pass(
     request: Any,
     user: Any,
@@ -612,8 +898,18 @@ async def run_gm_pass(
     model_id: str,
     kind: str = "turn",
     event_emitter: Optional[Callable] = None,
-) -> None:
-    """One GM pass reacting to message_id. Never raises; failures are journalled."""
+    talk: str = "",
+    prior_override: Any = _UNSET,
+    rejected_note: str = "",
+) -> Optional[Any]:
+    """One GM pass at message_id. Never raises; failures are journalled.
+
+    Where it starts from: a turn pass reacts to a new reply, so it builds on the
+    nearest pass *above* that reply (a regenerated reply starts where its sibling
+    did). Consult and table talk build on the plan as it stands at message_id. A
+    reroll passes its prior explicitly, to start again from where the rerolled pass
+    did. Returns the new journal entry, or None if nothing ran.
+    """
     from open_webui.models.chats import Chats
     from open_webui.models.game_master import GameMaster
     from open_webui.models.video_characters import VideoCharacters
@@ -634,29 +930,49 @@ async def run_gm_pass(
         async with _lock(chat_id):
             session = GameMaster.get_session(user.id, chat_id)
             if not session or not session.enabled:
-                return
-            await emit({"status": "running"})
+                return None
             started = time.monotonic()
             gm_model = ""
+            prior = None
             try:
                 chat = Chats.get_chat_by_id_and_user_id(chat_id, user.id)
                 if not chat:
-                    return
+                    return None
                 messages_map = Chats.get_messages_map_by_chat_id(chat_id) or {}
                 chain = get_message_list(messages_map, message_id) if message_id else []
 
                 index = GameMaster.get_entry_index(user.id, chat_id)
-                prior_id = find_state_entry_id(index, messages_map, message_id, inclusive=False)
+                if prior_override is not _UNSET:
+                    prior_id = prior_override or None
+                else:
+                    prior_id = find_state_entry_id(
+                        index, messages_map, message_id, inclusive=kind != "turn"
+                    )
                 prior = GameMaster.get_entry(user.id, prior_id) if prior_id else None
                 state = prior.state if prior else None
-                if state is None:
+
+                # Cadence: skip turn passes until enough replies have gone by. The
+                # previous direction simply stays in force meanwhile.
+                cadence = session.config.get("cadence", 1)
+                if kind == "turn" and prior and cadence > 1:
+                    since = count_replies_since(messages_map, message_id, prior.message_id)
+                    if since < cadence:
+                        return None
+                if state is None and kind in ("turn", "consult"):
                     kind = "setup"
 
+                await emit({"status": "running"})
                 models = request.app.state.MODELS
                 gm_model = resolve_gm_model(models, model_id)
                 if gm_model not in models:
                     raise ValueError(f"Model not found: {gm_model}")
 
+                talk_history = []
+                if kind == "table_talk":
+                    talk_history = [
+                        {"player": item.user_message, "gm": item.gm_reply}
+                        for item in GameMaster.get_table_talk(user.id, chat_id, TALK_HISTORY)
+                    ]
                 gm_messages = build_gm_messages(
                     characters=VideoCharacters.get_for_chat(user.id, chat_id),
                     player_character_id=session.config.get("player_character_id", ""),
@@ -665,6 +981,10 @@ async def run_gm_pass(
                     state=state,
                     last_note=prior.note if prior else "",
                     conversation=chain[-(SETUP_MESSAGES if state is None else TURN_MESSAGES):],
+                    kind=kind,
+                    talk=talk,
+                    talk_history=talk_history,
+                    rejected_note=rejected_note,
                 )
                 token_key = (
                     "max_tokens"
@@ -687,43 +1007,62 @@ async def run_gm_pass(
                     bypass_system_prompt=True,
                 )
                 content, model_reasoning, tokens = _reply_parts(response)
+                gm_reply = ""
+                if kind == "table_talk":
+                    gm_reply, content = parse_gm_talk(content)
                 reasoning, plan = parse_gm_reply(content)
                 duration_ms = int((time.monotonic() - started) * 1000)
+                common = {
+                    "message_id": message_id or "",
+                    "kind": kind,
+                    "prior_id": prior.id if prior else "",
+                    "user_message": talk if kind == "table_talk" else "",
+                    "gm_reply": _clip(gm_reply, 8000),
+                    "model_reasoning": model_reasoning,
+                    "model": gm_model,
+                    "tokens": tokens,
+                    "duration_ms": duration_ms,
+                }
+
                 if plan is None:
+                    if gm_reply:
+                        # The answer stands even without a plan; the plan carries over.
+                        entry = GameMaster.add_entry(
+                            user.id,
+                            chat_id,
+                            **common,
+                            reasoning=reasoning,
+                            state=copy.deepcopy(state) if state is not None else None,
+                            note=prior.note if prior else "",
+                        )
+                        await emit({"status": "done"})
+                        return entry
                     GameMaster.add_entry(
                         user.id,
                         chat_id,
-                        message_id=message_id or "",
-                        kind=kind,
+                        **common,
                         reasoning=reasoning or content,
-                        model_reasoning=model_reasoning,
-                        model=gm_model,
-                        tokens=tokens,
-                        duration_ms=duration_ms,
                         error="The GM's reply had no readable plan, so nothing was changed.",
                     )
                     await emit({"status": "error"})
-                    return
+                    return None
 
                 new_state = apply_plan(state, plan)
                 observations = [
                     _clip(o, 500) for o in plan.get("observations") or [] if isinstance(o, str)
                 ][:20]
                 note = _clip(_text(plan.get("note")), 4000)
-                GameMaster.add_entry(
+                patch = {k: plan[k] for k in ("update", "remove") if k in plan}
+                patch["changes"] = describe_changes(state, new_state)
+                entry = GameMaster.add_entry(
                     user.id,
                     chat_id,
-                    message_id=message_id or "",
-                    kind=kind,
+                    **common,
                     reasoning=reasoning,
-                    model_reasoning=model_reasoning,
                     observations=observations,
-                    patch={k: plan[k] for k in ("update", "remove") if k in plan},
+                    patch=patch,
                     state=new_state,
                     note=note,
-                    model=gm_model,
-                    tokens=tokens,
-                    duration_ms=duration_ms,
                 )
                 log.info(
                     "GM %s pass for chat %s: %d tokens in %.1fs",
@@ -732,7 +1071,10 @@ async def run_gm_pass(
                     tokens,
                     duration_ms / 1000,
                 )
+                if session.config.get("auto_portraits", True):
+                    await queue_missing_portraits(request, user, chat_id, new_state)
                 await emit({"status": "done"})
+                return entry
             except Exception as e:
                 log.exception("GM pass failed for chat %s", chat_id)
                 GameMaster.add_entry(
@@ -740,13 +1082,17 @@ async def run_gm_pass(
                     chat_id,
                     message_id=message_id or "",
                     kind=kind,
+                    prior_id=prior.id if prior else "",
+                    user_message=talk if kind == "table_talk" else "",
                     model=gm_model,
                     duration_ms=int((time.monotonic() - started) * 1000),
                     error=str(e)[:2000] or e.__class__.__name__,
                 )
                 await emit({"status": "error"})
+                return None
     except Exception:
         log.exception("GM pass could not be journalled for chat %s", chat_id)
+        return None
     finally:
         _running[chat_id] = max(0, _running.get(chat_id, 1) - 1)
 
@@ -759,6 +1105,7 @@ def schedule_gm_pass(
     model_id: str,
     kind: str = "turn",
     event_emitter: Optional[Callable] = None,
+    **options: Any,
 ) -> bool:
     """Start a pass in the background if the GM is on for this chat."""
     from open_webui.models.game_master import GameMaster
@@ -769,8 +1116,111 @@ def schedule_gm_pass(
     if not session or not session.enabled:
         return False
     task = asyncio.create_task(
-        run_gm_pass(request, user, chat_id, message_id, model_id, kind, event_emitter)
+        run_gm_pass(request, user, chat_id, message_id, model_id, kind, event_emitter, **options)
     )
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
     return True
+
+
+# ---------------------------------------------------------------------------
+# NPC portraits
+# ---------------------------------------------------------------------------
+
+
+def _can_generate_portraits(request: Any, user: Any) -> bool:
+    from fastapi import HTTPException
+    from open_webui.routers.videos import _check_video_access
+
+    try:
+        _check_video_access(request, user)
+        return True
+    except HTTPException:
+        return False
+
+
+async def queue_npc_portrait(
+    request: Any, user: Any, chat_id: str, npc: dict, seed: Optional[int] = None
+) -> bool:
+    """Queue one portrait behind any videos. False if portraits are unavailable."""
+    import random
+
+    from open_webui.models.game_master import GameMaster
+    from open_webui.routers.videos import _upload_video, enqueue_comfyui_job
+    from open_webui.utils.videos.comfyui import ComfyUIVideoClient
+    from open_webui.utils.videos.portrait import generate_portrait
+
+    npc_id, name, look = npc.get("id"), _text(npc.get("name")), _text(npc.get("look"))
+    if not npc_id or not name or not look or not _can_generate_portraits(request, user):
+        return False
+    seed = seed if seed is not None else random.randint(0, 2**53 - 1)
+    GameMaster.set_portrait(
+        user.id, chat_id, npc_id, name=name, look=look, status="queued", seed=seed, error="", file_id=""
+    )
+
+    async def runner() -> dict:
+        GameMaster.set_portrait(user.id, chat_id, npc_id, status="running")
+        try:
+            config = request.app.state.config
+            client = ComfyUIVideoClient(
+                config.COMFYUI_VIDEO_BASE_URL,
+                config.COMFYUI_VIDEO_API_KEY,
+                config.COMFYUI_VIDEO_TIMEOUT,
+            )
+            data, _, content_type = await generate_portrait(client, look, seed)
+            safe = re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-")[:40] or "npc"
+            file_item, _ = await asyncio.to_thread(
+                _upload_video,
+                request,
+                data,
+                f"gm-portrait-{safe}.png",
+                content_type,
+                {"gm_portrait": {"chat_id": chat_id, "npc_id": npc_id, "name": name, "seed": str(seed)}},
+                user,
+            )
+            GameMaster.set_portrait(
+                user.id, chat_id, npc_id, status="ready", file_id=file_item.id, error=""
+            )
+            return {"file_id": file_item.id}
+        except Exception as e:
+            log.exception("Portrait for %s failed", name)
+            GameMaster.set_portrait(
+                user.id, chat_id, npc_id, status="failed", error=str(e)[:1000] or "Portrait failed"
+            )
+            raise
+
+    await enqueue_comfyui_job(user.id, "portrait", f"Portrait: {name}", runner)
+    return True
+
+
+async def queue_missing_portraits(request: Any, user: Any, chat_id: str, state: dict) -> None:
+    """Portraits for NPCs who have just come on stage. Never raises."""
+    from open_webui.models.game_master import GameMaster
+
+    try:
+        drawn = {p.npc_id: p.name for p in GameMaster.get_portraits(user.id, chat_id)}
+        for npc in npcs_needing_portraits(state, drawn):
+            if not await queue_npc_portrait(request, user, chat_id, npc):
+                return
+    except Exception:
+        log.exception("Could not queue NPC portraits for chat %s", chat_id)
+
+
+def get_scene_npcs(user_id: str, chat_id: str, message_id: Optional[str]) -> list[dict]:
+    """NPCs on stage at message_id, with their portraits, for the Video Studio."""
+    from open_webui.models.chats import Chats
+    from open_webui.models.game_master import GameMaster
+
+    index = GameMaster.get_entry_index(user_id, chat_id)
+    if not index:
+        return []
+    messages_map = Chats.get_messages_map_by_chat_id(chat_id)
+    entry_id = find_state_entry_id(index, messages_map, message_id, inclusive=True)
+    entry = GameMaster.get_entry(user_id, entry_id) if entry_id else None
+    if not entry:
+        return []
+    portraits = {
+        p.npc_id: {"name": p.name, "status": p.status, "file_id": p.file_id}
+        for p in GameMaster.get_portraits(user_id, chat_id)
+    }
+    return scene_npcs(entry.state, portraits)

@@ -5,7 +5,9 @@
 	import {
 		consultGameMaster,
 		getGameMaster,
+		rerollGameMaster,
 		updateGameMaster,
+		type GameMasterConfig,
 		type GameMasterIntensity,
 		type GameMasterStatus
 	} from '$lib/apis/gamemaster';
@@ -14,7 +16,16 @@
 		getVideoCharacterLibrary,
 		type VideoCharacter
 	} from '$lib/apis/videos';
-	import { gameMasterVersion, pendingChatCharacterIds, pendingGameMaster } from '$lib/stores';
+	import {
+		config,
+		gameMasterTranscript,
+		gameMasterVersion,
+		pendingChatCharacterIds,
+		pendingGameMaster,
+		user
+	} from '$lib/stores';
+	import GameMasterCast from './GameMasterCast.svelte';
+	import GameMasterTalk from './GameMasterTalk.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -28,6 +39,7 @@
 	let seenVersion = 0;
 	let saving = false;
 	let consulting = false;
+	let rerolling = false;
 	let agenda = '';
 	// Polling must not overwrite what is being typed.
 	let editingAgenda = false;
@@ -43,7 +55,16 @@
 	$: intensity = (hasChat ? status?.config?.intensity : pending?.intensity) ?? 'firm';
 	$: playerId =
 		(hasChat ? status?.config?.player_character_id : pending?.player_character_id) ?? '';
+	$: cadence = (hasChat ? status?.config?.cadence : pending?.cadence) ?? 1;
+	$: autoPortraits = (hasChat ? status?.config?.auto_portraits : pending?.auto_portraits) ?? true;
 	$: current = status?.current ?? null;
+	// Portraits run on the video pipeline, so they follow its switch and permission.
+	$: canDraw =
+		!!$config?.features?.enable_video_generation &&
+		($user?.role === 'admin' || !!$user?.permissions?.features?.image_generation);
+	$: drawing = (status?.portraits ?? []).some(
+		(p) => p.status === 'queued' || p.status === 'running'
+	);
 	$: people = characters.filter((c) => (c.kind ?? 'character') === 'character');
 
 	const loadCharacters = async () => {
@@ -62,7 +83,10 @@
 	const schedulePoll = () => {
 		if (pollTimer) clearTimeout(pollTimer);
 		pollTimer = null;
-		if (status?.running) pollTimer = setTimeout(() => void refresh(), POLL_MS);
+		const drawingNow = (status?.portraits ?? []).some(
+			(p) => p.status === 'queued' || p.status === 'running'
+		);
+		if (status?.running || drawingNow) pollTimer = setTimeout(() => void refresh(), POLL_MS);
 	};
 
 	const refresh = async () => {
@@ -95,12 +119,7 @@
 		if (pollTimer) clearTimeout(pollTimer);
 	});
 
-	const change = async (changes: {
-		enabled?: boolean;
-		intensity?: GameMasterIntensity;
-		agenda?: string;
-		player_character_id?: string;
-	}) => {
+	const change = async (changes: Partial<GameMasterConfig> & { enabled?: boolean }) => {
 		if (!hasChat || !chatId) {
 			// Before the first message there is no chat to save to; initChatHandler
 			// applies this the moment the chat is created.
@@ -109,6 +128,8 @@
 				intensity: pending?.intensity ?? 'firm',
 				agenda: pending?.agenda ?? '',
 				player_character_id: pending?.player_character_id ?? '',
+				cadence: pending?.cadence ?? 1,
+				auto_portraits: pending?.auto_portraits ?? true,
 				...changes
 			});
 			return;
@@ -142,6 +163,24 @@
 		} finally {
 			consulting = false;
 		}
+	};
+
+	const reroll = async () => {
+		if (!chatId) return;
+		rerolling = true;
+		try {
+			status = await rerollGameMaster(localStorage.token, chatId);
+			schedulePoll();
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			rerolling = false;
+		}
+	};
+
+	const setStatus = (next: GameMasterStatus) => {
+		status = next;
+		schedulePoll();
 	};
 
 	const ago = (ms: number) => {
@@ -204,6 +243,32 @@
 			</select>
 		</div>
 
+		<div class="flex items-center gap-2">
+			<span class="w-24 shrink-0 text-gray-500">{$i18n.t('Plans after')}</span>
+			<select
+				class="flex-1 bg-transparent outline-hidden py-0.5"
+				value={String(cadence)}
+				on:change={(e) =>
+					change({ cadence: Number(e.currentTarget.value) as GameMasterConfig['cadence'] })}
+			>
+				<option value="1">{$i18n.t('Every reply')}</option>
+				<option value="2">{$i18n.t('Every 2nd reply (cheaper)')}</option>
+				<option value="3">{$i18n.t('Every 3rd reply (cheapest)')}</option>
+			</select>
+		</div>
+
+		{#if canDraw}
+			<label class="flex items-center gap-2">
+				<input
+					type="checkbox"
+					class="size-3.5 accent-gray-700"
+					checked={autoPortraits}
+					on:change={(e) => change({ auto_portraits: e.currentTarget.checked })}
+				/>
+				<span>{$i18n.t('Draw a portrait of each NPC when they first appear')}</span>
+			</label>
+		{/if}
+
 		<div>
 			<div class="text-gray-500 mb-0.5">{$i18n.t('Agenda for the GM')}</div>
 			<textarea
@@ -229,12 +294,30 @@
 				{:else}
 					<span>{$i18n.t('No direction yet. It is written after the next reply.')}</span>
 				{/if}
+			</div>
+			<div class="flex flex-wrap gap-1.5">
 				<button
-					class="ml-auto px-2 py-0.5 rounded-lg bg-gray-100 dark:bg-gray-850 hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-50"
+					class="px-2 py-0.5 rounded-lg bg-gray-100 dark:bg-gray-850 hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-50"
+					title={$i18n.t('Have the GM look again at the story as it stands')}
 					disabled={consulting || status?.running}
 					on:click={consult}
 				>
 					{$i18n.t('Consult now')}
+				</button>
+				<button
+					class="px-2 py-0.5 rounded-lg bg-gray-100 dark:bg-gray-850 hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-50"
+					title={$i18n.t('Throw away the current direction and plan this moment again')}
+					disabled={rerolling || status?.running || !current || current.kind === 'table_talk'}
+					on:click={reroll}
+				>
+					{$i18n.t('Reroll direction')}
+				</button>
+				<button
+					class="px-2 py-0.5 rounded-lg bg-gray-100 dark:bg-gray-850 hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-50"
+					disabled={!status?.entries}
+					on:click={() => gameMasterTranscript.set({})}
+				>
+					{$i18n.t('Transcript')}
 				</button>
 			</div>
 
@@ -301,6 +384,29 @@
 						</button>
 					{/if}
 				</div>
+			{/if}
+
+			<hr class="border-gray-50 dark:border-gray-700/10" />
+			<div class="font-medium">{$i18n.t('Table talk')}</div>
+			{#if chatId}
+				<GameMasterTalk {chatId} talk={status?.talk ?? []} onStatus={setStatus} />
+			{/if}
+
+			<hr class="border-gray-50 dark:border-gray-700/10" />
+			<div class="font-medium">
+				{$i18n.t('Cast')}
+				{#if drawing}<span class="font-normal text-gray-500 animate-pulse">
+						· {$i18n.t('drawing portraits…')}</span
+					>{/if}
+			</div>
+			{#if chatId}
+				<GameMasterCast
+					{chatId}
+					state={current?.state ?? null}
+					portraits={status?.portraits ?? []}
+					{canDraw}
+					onStatus={setStatus}
+				/>
 			{/if}
 		{:else}
 			<div class="text-gray-500">

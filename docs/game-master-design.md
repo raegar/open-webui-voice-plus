@@ -1,6 +1,6 @@
 # Game Master: design
 
-Status: **stage 1 built** (core loop, 2026-10-01): tables, session zero, GM pass with NPCs, background trigger, `<director_notes>` injection, and the Game Master section in Chat Controls (toggle, intensity, played by me, agenda, Consult now, and the current direction and reasoning behind click-to-reveal). Stages 2–6 are still to come.
+Status: **all six stages built** (2026-10-01). Stage 1: tables, session zero, GM pass with NPCs, background trigger, `<director_notes>` injection, and the Game Master section in Chat Controls. Stages 2–6: the transcript and reply markers, table talk and `/gm`, Reroll and cadence, branch-correct state (built into stage 1 and covered by tests), and NPC portraits with the Video Studio handoff. See [As built](#as-built) for where the build differs from the design below.
 
 Decisions (2026-09-30):
 
@@ -43,7 +43,8 @@ The GM is optional, per chat and off by default. It starts ("spawns") when it's 
   - an **Intensity** setting: *Light* (keeps characters consistent, rarely adds events), *Firm* (characters hold their ground, occasional complications), *Ruthless* (active antagonism, real setbacks, refusals that stick);
   - a **"Played by me"** marker on one attached character. The GM never directs that character. See [Your own character](#your-own-character);
   - the **current direction**: the note the actor will get on the next turn, with a *Reroll* button;
-  - **Consult now**: runs the GM immediately, e.g. after the user edits the agenda.
+  - **Consult now**: runs the GM immediately on top of its current plan, e.g. after the user edits the agenda.
+  - **Reroll direction**: throws away the direction in force and plans that moment again from the same starting point, told what was rejected.
 - **Table talk**: an out-of-character conversation with the GM. See [Talking to the GM](#talking-to-the-gm).
 - **The GM transcript.** A chronological log of every GM pass: what it noticed, its reasoning, what it changed in its plans, and the note it issued. It opens from the Controls section and from a small marker on each steered assistant message ("GM: steered this reply"), which jumps to that turn's entry.
 - **Spoilers are hidden until clicked.** The GM's secrets, GM-only threads and planned twists are covered in the transcript and the state view. Each reveals on click, so the user can peek at one without spoiling the rest.
@@ -80,7 +81,7 @@ The cost is a one-turn lag: the GM writes its note before it sees the user's nex
 
 Table talk is the exception: a message to the GM triggers a pass straight away, so a suggestion can shape the very next reply rather than the one after.
 
-The GM does not have to run on every turn. A **cadence** setting (every turn / every 2 / every 3) saves cost. A skipped turn reuses the previous note. The GM always runs on the first turn, after table talk, and on *Consult now*.
+The GM does not have to run on every turn. A **cadence** setting (every turn / every 2 / every 3) saves cost. A skipped turn reuses the previous note, and writes nothing to the journal. The GM always runs on the first turn, after table talk, and on *Consult now*.
 
 ## Session zero (spawn)
 
@@ -315,12 +316,13 @@ Each GM pass writes one **journal entry**:
 | Field | Purpose |
 | --- | --- |
 | `message_id` | The assistant message the pass reacted to. It links an entry to a reply in the chat and makes branching work (below). |
-| `kind` | `setup`, `turn`, `consult`, `reroll`, `table_talk`, or `skipped` |
+| `kind` | `setup`, `turn`, `consult`, `reroll`, or `table_talk` |
+| `prior_id` | The entry whose state this pass built on. A reroll starts again from the same prior. |
 | `user_message`, `gm_reply` | For `table_talk` entries: what the user said and what the GM answered |
 | `reasoning` | The GM's free-text thinking, shown in the transcript as written |
 | `model_reasoning` | A reasoning model's native thinking, if any, collapsed by default |
 | `observations` | Short list: caves detected, drift, threads advanced |
-| `patch` | The state changes this pass made, shown as a readable diff |
+| `patch` | The GM's `update` and `remove`, plus `changes`: readable lines with a spoiler flag, computed from the state before and after |
 | `state` | The full state after the pass (a snapshot, for branching) |
 | `note` | The director's note this pass issued |
 | `model`, `tokens`, `duration_ms`, `error` | Cost and diagnostics |
@@ -374,8 +376,8 @@ GM rows can outlive their chat, as `private_chat` rows do: the upstream chat rou
 | Trigger after reply | `background_tasks_handler` in `utils/middleware.py`, next to title and tag generation, emitting a `chat:gm` event |
 | UI: toggle, agenda, intensity, current note, table talk | new section in `Controls/Controls.svelte` |
 | `/gm` shortcut | message input: route to table talk instead of sending to the chat |
-| Portrait workflow (Z-Image-Turbo, with `/free` before and after) | new `utils/images/zimage.py`, reusing the ComfyUI client in `utils/videos/comfyui.py` |
-| Portrait jobs | the existing video job queue in `routers/videos.py`, as a new job type |
+| Portrait workflow (Z-Image-Turbo, with `/free` before and after) | new `utils/videos/portrait.py`, reusing the ComfyUI client in `utils/videos/comfyui.py`. In `utils/videos/` because the Dockerfile already copies that folder. |
+| Portrait jobs | the existing video job queue in `routers/videos.py` via `enqueue_comfyui_job`, a job that brings its own runner. Kept out of the studio's job list, which adopts every listed job as a video. |
 | NPC references in Video Studio | scene handoff in `ResponseMessage.svelte`, reference picker in `video/+page.svelte` |
 | UI: transcript | new component, opened from Controls and from a marker in `ResponseMessage.svelte` |
 
@@ -400,6 +402,18 @@ GM rows can outlive their chat, as `private_chat` rows do: the upstream chat rou
 6. **NPC portraits.** Z-Image-Turbo workflow, portrait jobs on the video queue with memory cleared before and after, Regenerate, and NPC references in the Video Studio handoff within the 9-picture limit.
 
 Stage 1 is enough to find out whether the idea works at all. Everything after it is about control and visibility.
+
+## As built
+
+Where the build differs from the design above, and why:
+
+- **Where each pass starts from.** A turn pass reacts to a new reply, so it builds on the nearest pass *above* that reply; a regenerated reply starts where its sibling did. Consult and table talk build on the plan as it stands, so they never undo each other. A reroll carries its `prior_id` explicitly and starts again from there. A table-talk entry can't be rerolled.
+- **Table talk waits for the answer.** `POST /talk` runs the pass in the request and returns the GM's reply, rather than running in the background. Replies take seconds, and the panel shows "The GM is thinking…" meanwhile. If the GM answers but its plan is unreadable, the answer still stands and the previous plan carries over.
+- **Out-of-character asides in the chat** are handled by the turn pass's prompt (principle 6). They are not routed to table talk.
+- **Markers only show while the GM is on.** Nothing records when it was switched off, so once it is off no reply is marked as steered.
+- **The cast list hides NPCs still waiting in the wings.** It shows the ones the story has met, with card, look and portrait. Their wants stay in the transcript, behind a click.
+- **An NPC who doesn't fit in the 9 reference pictures** stays in the Video Studio brief as a text-only cast entry, and the studio says who that happened to. An on-stage NPC with no portrait yet goes in the same way.
+- **GM rows outlive a deleted chat**, as `private_chat` rows do. See [Storage](#storage).
 
 **Later, if wanted:** a *Deliberate* mode that runs the GM before each reply rather than after, for when the one-turn lag gets in the way; saving NPCs to the character library; a per-chat GM model override.
 

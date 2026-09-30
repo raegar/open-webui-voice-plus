@@ -623,6 +623,8 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 		voices: string[];
 		castNames: string[];
 		summary: string | null;
+		/** Game Master NPCs who had a portrait but found no reference slot left. */
+		unpictured: string[];
 	}> => {
 		const images: FrameAsset[] = [];
 		const voices: string[] = [];
@@ -633,10 +635,17 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 		const castNames: string[] = [];
 		const settingRefs: string[] = [];
 		const wardrobe: string[] = [];
+		const unpictured: string[] = [];
 
-		const isCharacter = (entry: { kind?: string }) => (entry?.kind ?? 'character') === 'character';
-		// Characters first, then references, preserving order within each group.
-		const ordered = [...roster.filter(isCharacter), ...roster.filter((e) => !isCharacter(e))];
+		const kindOf = (entry: { kind?: string }) => entry?.kind ?? 'character';
+		// Characters first, then references, then the Game Master's NPCs, preserving
+		// order within each group. NPCs come last so they only take slots the chat's own
+		// characters and references leave free.
+		const ordered = [
+			...roster.filter((e) => kindOf(e) === 'character'),
+			...roster.filter((e) => kindOf(e) !== 'character' && kindOf(e) !== 'npc'),
+			...roster.filter((e) => kindOf(e) === 'npc')
+		];
 
 		for (const entry of ordered) {
 			const fileIds = Array.isArray(entry?.imageFileIds) ? entry.imageFileIds : [];
@@ -650,6 +659,16 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 				} catch (error) {
 					console.error(error);
 				}
+			}
+			// An NPC without a picture is still in the scene: describe them from text.
+			if (indices.length === 0 && kindOf(entry) === 'npc' && entry?.name?.trim()) {
+				if (fileIds.length > 0) unpictured.push(entry.name.trim());
+				const description = entry?.description?.trim() || 'No written description provided.';
+				cast.push(
+					`${entry.name.trim()} — no reference picture. Describe them in full from this text: ${description}`
+				);
+				castNames.push(entry.name.trim());
+				continue;
 			}
 			if (indices.length === 0) continue;
 
@@ -707,7 +726,8 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 			images,
 			voices,
 			castNames: [...new Set(castNames)],
-			summary: sections.length ? sections.join(NL + NL) : null
+			summary: sections.length ? sections.join(NL + NL) : null,
+			unpictured
 		};
 	};
 
@@ -783,6 +803,13 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 			// are fetched here, because Ref2VA needs the pixels at generation time.
 			const roster = Array.isArray(handoff?.characters) ? handoff.characters : [];
 			const loaded = await loadCharacterReferences(roster);
+			if (loaded.unpictured.length) {
+				toast.info(
+					`Reference pictures are full (9 max), so ${loaded.unpictured.join(', ')} ${
+						loaded.unpictured.length === 1 ? 'is' : 'are'
+					} described from text instead.`
+				);
+			}
 			if (loaded.images.length > 0) {
 				selectMode('reference');
 				referenceImages = loaded.images;

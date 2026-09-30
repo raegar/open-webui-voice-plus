@@ -19,12 +19,15 @@
 	import {
 		audioQueue,
 		config,
+		gameMasterIndex,
+		gameMasterTranscript,
 		models,
 		settings,
 		temporaryChatEnabled,
 		TTSWorker,
 		user
 	} from '$lib/stores';
+	import { findSteeringEntry, getSceneNpcs } from '$lib/apis/gamemaster';
 	import { synthesizeOpenAISpeech } from '$lib/apis/audio';
 	import { imageGenerations } from '$lib/apis/images';
 	import { getChatVideoCharacters, videoGenerations } from '$lib/apis/videos';
@@ -251,6 +254,16 @@
 
 	let regeneratingVideo = false;
 
+	// The Game Master pass whose direction was in force when this reply was written:
+	// the nearest pass above it on this branch, made before the reply. Only shown while
+	// the GM is on, since once it is off nothing marks where it stopped.
+	$: gmSteering =
+		$gameMasterIndex?.enabled && $gameMasterIndex.chatId === chatId && message?.parentId
+			? findSteeringEntry($gameMasterIndex.entries, history?.messages ?? {}, message.parentId)
+			: null;
+	$: gmSteered =
+		!!gmSteering && (!message?.timestamp || gmSteering.created_at / 1000 <= message.timestamp);
+
 	// Hand a chat scene to the Video Studio. The video model cannot see this
 	// conversation, so we ship the surrounding turns as well: character looks are
 	// usually established many messages before the scene being depicted.
@@ -330,6 +343,26 @@
 				}
 			} catch (error) {
 				// A roster lookup failure must not block the scene; fall back to text-to-video.
+				console.error(error);
+			}
+
+			// Game Master NPCs in this scene ride along after the attached characters, so
+			// they only take reference slots the chat's own characters leave free.
+			try {
+				const npcs = await getSceneNpcs(localStorage.token, chatId, messageId);
+				for (const npc of npcs) {
+					characters.push({
+						name: npc.name,
+						description: [npc.card, npc.look ? `Looks: ${npc.look}` : '']
+							.filter(Boolean)
+							.join('. '),
+						imageFileIds: npc.file_id ? [npc.file_id] : [],
+						voiceFileId: '',
+						kind: 'npc',
+						state: ''
+					});
+				}
+			} catch (error) {
 				console.error(error);
 			}
 		}
@@ -1618,6 +1651,22 @@
 												{:else}
 													<PhotoRefresh className="size-4" strokeWidth="2.3" />
 												{/if}
+											</button>
+										</Tooltip>
+									{/if}
+
+									{#if message.done && gmSteered}
+										<Tooltip
+											content={$i18n.t('Steered by the Game Master. Open its transcript.')}
+											placement="bottom"
+										>
+											<button
+												type="button"
+												aria-label={$i18n.t('Steered by the Game Master')}
+												class="px-1.5 py-1 text-[10px] font-semibold tracking-wide hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition"
+												on:click={() => gameMasterTranscript.set({ entryId: gmSteering?.id })}
+											>
+												GM
 											</button>
 										</Tooltip>
 									{/if}
