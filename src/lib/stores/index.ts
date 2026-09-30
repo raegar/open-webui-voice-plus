@@ -57,6 +57,15 @@ export const pendingChatCharacterIds = writable<string[]>([]);
 // Bumped when character state is updated automatically, so an open Controls
 // pane reloads instead of showing what it read when it opened.
 export const characterStateVersion = writable(0);
+// Bumped when the Game Master finishes a pass, so an open Controls pane refreshes.
+export const gameMasterVersion = writable(0);
+// Game Master settings chosen before a chat's first message, applied once it exists.
+export const pendingGameMaster = writable<{
+	enabled: boolean;
+	intensity: 'light' | 'firm' | 'ruthless';
+	agenda: string;
+	player_character_id: string;
+} | null>(null);
 export const chatTitle = writable('');
 
 export const channels = writable([]);

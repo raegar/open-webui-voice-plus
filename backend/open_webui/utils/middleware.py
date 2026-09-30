@@ -109,6 +109,7 @@ from open_webui.utils.filter import (
 from open_webui.utils.code_interpreter import execute_code_jupyter
 from open_webui.utils.payload import apply_system_prompt_to_body
 from open_webui.utils.character_personality import inject_character_personality
+from open_webui.utils.game_master import inject_director_notes, schedule_gm_pass
 from open_webui.utils.chat_instructions import (
     CHAT_INSTRUCTIONS_PARAM,
     get_stored_chat_instructions,
@@ -2313,6 +2314,17 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             # Character metadata should enhance a chat, never prevent it from replying.
             log.exception("Could not apply attached character profiles to chat completion")
 
+    # The Game Master's direction for this reply, from the nearest earlier GM pass on
+    # this branch. Between the profiles it builds on and the user's instructions,
+    # which outrank it.
+    if chat_id and user and not chat_id.startswith("local:"):
+        try:
+            form_data["messages"] = inject_director_notes(
+                form_data["messages"], user.id, chat_id, parent_message_id
+            )
+        except Exception:
+            log.exception("Could not apply Game Master direction to chat completion")
+
     # After the character profiles, so the user's instructions are the last word.
     try:
         if chat_instructions is None and chat_id and user and not chat_id.startswith("local:"):
@@ -2878,6 +2890,30 @@ async def background_tasks_handler(ctx):
         messages = form_data.get("messages", [])
         if message:
             message["model"] = form_data.get("model")
+
+    # The Game Master reviews the finished reply and plans the next one. Detached, so
+    # titles and tags do not wait on it and the reply adds no latency.
+    chat_id = metadata.get("chat_id") or ""
+    if (
+        chat_id
+        and not chat_id.startswith("local:")
+        and message
+        and message.get("role") == "assistant"
+        and isinstance(message.get("content"), str)
+        and message["content"].strip()
+    ):
+        try:
+            schedule_gm_pass(
+                request,
+                user,
+                chat_id,
+                metadata.get("message_id"),
+                form_data.get("model") or message.get("model") or "",
+                kind="turn",
+                event_emitter=event_emitter,
+            )
+        except Exception:
+            log.exception("Could not start the Game Master pass")
 
     if message and "model" in message:
         if tasks and messages:

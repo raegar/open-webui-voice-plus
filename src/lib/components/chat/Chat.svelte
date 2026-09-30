@@ -17,6 +17,8 @@
 	import {
 		chatId,
 		pendingChatCharacterIds,
+		gameMasterVersion,
+		pendingGameMaster,
 		hiddenChatIds,
 		chats,
 		config,
@@ -110,6 +112,7 @@
 	import { getBanners } from '$lib/apis/configs';
 	import { attachVideoCharacter } from '$lib/apis/videos';
 	import { syncCharacterState } from '$lib/utils/characterState';
+	import { updateGameMaster } from '$lib/apis/gamemaster';
 
 	export let chatIdProp = '';
 
@@ -550,6 +553,9 @@
 					chatTitle.set(data);
 					currentChatPage.set(1);
 					await chats.set(await getChatList(localStorage.token, $currentChatPage));
+				} else if (type === 'chat:gm') {
+					// The Game Master started or finished a pass; an open Controls pane refreshes.
+					gameMasterVersion.update((n) => n + 1);
 				} else if (type === 'chat:tags') {
 					chat = await getChatById(localStorage.token, $chatId);
 					allTags.set(await getAllTags(localStorage.token));
@@ -1211,6 +1217,7 @@
 		await chatId.set('');
 		await chatTitle.set('');
 		pendingChatCharacterIds.set([]);
+		pendingGameMaster.set(null);
 
 		history = {
 			messages: {},
@@ -2647,6 +2654,21 @@
 		}
 	};
 
+	// Game Master settings chosen before the first message. Switching it on here spawns
+	// the GM alongside the new chat; its first pass runs while the first reply streams.
+	const flushPendingGameMaster = async (targetChatId) => {
+		const pending = get(pendingGameMaster);
+		if (!pending || !targetChatId || targetChatId.startsWith('local:')) return;
+		try {
+			await updateGameMaster(localStorage.token, targetChatId, pending);
+		} catch (error) {
+			console.error(error);
+			toast.error(`${error}`);
+		} finally {
+			pendingGameMaster.set(null);
+		}
+	};
+
 	const initChatHandler = async (history) => {
 		let _chatId = $chatId;
 
@@ -2670,6 +2692,7 @@
 			_chatId = chat.id;
 			await chatId.set(_chatId);
 			await flushPendingCharacters(_chatId);
+			await flushPendingGameMaster(_chatId);
 
 			window.history.replaceState(history.state, '', `/c/${_chatId}`);
 

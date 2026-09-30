@@ -9,6 +9,7 @@
 	import FileItem from '$lib/components/common/FileItem.svelte';
 	import Collapsible from '$lib/components/common/Collapsible.svelte';
 	import VideoCharacters from '$lib/components/chat/Controls/VideoCharacters.svelte';
+	import GameMaster from '$lib/components/chat/Controls/GameMaster.svelte';
 
 	import { toast } from 'svelte-sonner';
 	import { config, privateChatIds, user, settings } from '$lib/stores';
@@ -35,6 +36,7 @@
 	let showVideoCharacters = getOpen('videoCharacters', false);
 	let showValves = getOpen('valves', false);
 	let showChatInstructions = getOpen('chatInstructions');
+	let showGameMaster = getOpen('gameMaster', false);
 	let showSystemPrompt = getOpen('systemPrompt');
 	let showAdvancedParams = getOpen('advancedParams');
 
@@ -108,6 +110,21 @@
 			</Collapsible>
 
 			<hr class="my-2 border-gray-50 dark:border-gray-700/10" />
+
+			{#if !chatId?.startsWith('local:')}
+				<Collapsible
+					title={$i18n.t('Game Master')}
+					bind:open={showGameMaster}
+					onChange={setOpen('gameMaster')}
+					buttonClassName="w-full"
+				>
+					<div slot="content">
+						<GameMaster {chatId} />
+					</div>
+				</Collapsible>
+
+				<hr class="my-2 border-gray-50 dark:border-gray-700/10" />
+			{/if}
 
 			{#if $config?.features?.enable_video_generation && ($user?.role === 'admin' || $user?.permissions?.features?.image_generation)}
 				<Collapsible

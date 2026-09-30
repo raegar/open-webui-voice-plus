@@ -47,6 +47,14 @@ RUN sed -i 's/^    videos,$/    videos,\n    privacy,/' /app/backend/open_webui/
     && sed -i "s|app.include_router(videos.router, prefix='/api/v1/videos', tags=\['videos'\])|app.include_router(videos.router, prefix='/api/v1/videos', tags=['videos'])\napp.include_router(privacy.router, prefix='/api/v1/privacy', tags=['privacy'])|" /app/backend/open_webui/main.py \
     && grep -q '^    privacy,$' /app/backend/open_webui/main.py \
     && grep -q 'include_router(privacy.router' /app/backend/open_webui/main.py
+# Game Master: the fork's own tables, pass logic and router, registered after privacy.
+COPY --from=builder /build/backend/open_webui/models/game_master.py /app/backend/open_webui/models/game_master.py
+COPY --from=builder /build/backend/open_webui/utils/game_master.py /app/backend/open_webui/utils/game_master.py
+COPY --from=builder /build/backend/open_webui/routers/game_master.py /app/backend/open_webui/routers/game_master.py
+RUN sed -i 's/^    privacy,$/    privacy,\n    game_master,/' /app/backend/open_webui/main.py \
+    && sed -i "s|app.include_router(privacy.router, prefix='/api/v1/privacy', tags=\['privacy'\])|app.include_router(privacy.router, prefix='/api/v1/privacy', tags=['privacy'])\napp.include_router(game_master.router, prefix='/api/v1/gm', tags=['game-master'])|" /app/backend/open_webui/main.py \
+    && grep -q '^    game_master,$' /app/backend/open_webui/main.py \
+    && grep -q 'include_router(game_master.router' /app/backend/open_webui/main.py
 # Scheduled jobs feature (local files — not from fork, no GitHub push needed)
 COPY backend/open_webui/models/scheduled_jobs.py /app/backend/open_webui/models/scheduled_jobs.py
 COPY backend/open_webui/routers/scheduled_jobs.py /app/backend/open_webui/routers/scheduled_jobs.py

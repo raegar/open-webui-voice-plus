@@ -1,6 +1,6 @@
 # Game Master: design
 
-Status: **design agreed**, nothing built yet.
+Status: **stage 1 built** (core loop, 2026-10-01): tables, session zero, GM pass with NPCs, background trigger, `<director_notes>` injection, and the Game Master section in Chat Controls (toggle, intensity, played by me, agenda, Consult now, and the current direction and reasoning behind click-to-reveal). Stages 2–6 are still to come.
 
 Decisions (2026-09-30):
 
@@ -361,7 +361,7 @@ gm_journal
 
 Table talk lives in `gm_journal` rather than a table of its own. It's part of the same timeline as the turn entries, and a table-talk entry carries a state snapshot like any other pass, so it fits the branching scheme below without special handling. It hangs off the chat's current leaf message at the time it was sent.
 
-Deleting a chat deletes its GM session and journal. The journal follows the chat's visibility: when work mode hides a private chat, its transcript is hidden too.
+GM rows can outlive their chat, as `private_chat` rows do: the upstream chat routes ship unmodified in the base image, so there is no hook on chat deletion. An orphaned row is never read, so that is harmless. The journal follows the chat's visibility: it is only reachable through its chat, so when work mode hides a private chat, its transcript is hidden too.
 
 ## Where it plugs in
 
