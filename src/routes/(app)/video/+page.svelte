@@ -2004,7 +2004,11 @@ Write the final MiniMax H3 production brief now.`
 					></textarea>
 					<div class="mt-3 flex justify-end">
 						<button
-							class="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
+							class="rounded-xl px-4 py-2 text-sm font-medium disabled:cursor-not-allowed {productionPrompt
+								? 'bg-black text-white disabled:opacity-40 dark:bg-white dark:text-black'
+								: !selectedModelId || !creativeDirection.trim()
+									? 'bg-gray-200 text-gray-500 dark:bg-gray-800 dark:text-gray-500'
+									: 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60'}"
 							disabled={drafting || !selectedModelId || !creativeDirection.trim()}
 							on:click={draftPrompt}
 						>
