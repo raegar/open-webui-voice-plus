@@ -260,6 +260,17 @@ FLUX.2 [klein] 4B was the runner-up. It's a little faster and follows prompts sl
 2. runs the Z-Image graph (text encode → 8-step sample → decode → `SaveImage`), at about 1 MP in portrait orientation (832×1216);
 3. calls `/free` again **after**, so Z-Image is out of VRAM and RAM before the next video needs them.
 
+**Measured (2026-09-30)**, on the test NPC with the settings from ComfyUI's own `image_z_image_turbo_int8` template (8 steps, CFG 1, `res_multistep` / `simple`, AuraFlow shift 3, text encoder type `lumina2`) at 832×1216:
+
+| Step | Result |
+| --- | --- |
+| VRAM with H3 resident → after `/free` | 15.4 GB → 1.6 GB |
+| Portrait, including loading both models | 5.8 s in ComfyUI, 6.0 s from submit to image on disk |
+| VRAM peak during the portrait | 12.8 GB |
+| VRAM after the second `/free` | 1.6 GB |
+
+The model files had just been downloaded, so they were probably still in Windows' file cache. A first portrait after a reboot will take a few seconds longer to load. The image matched the written look closely: face, hair, coat, turtleneck and gloves were all as described, on a plain background.
+
 The price is that a video following a portrait reloads H3 from disk. That's a reload it often pays anyway, and far cheaper than a crash. Because both happen through the one queue, a portrait and a video can never be on the GPU at the same time.
 
 The prompt is built from the NPC's `look`, framed to make a good reference: three-quarter length so the outfit shows, facing the camera, natural expression, even light, plain background, realistic photograph. No style is applied. The reference should show what the NPC looks like, and the video's own style settings decide how the clip is rendered.
@@ -395,5 +406,5 @@ Stage 1 is enough to find out whether the idea works at all. Everything after it
 ## Open questions
 
 - **Should the GM's state be editable directly?** Table talk now covers corrections ("Sam doesn't know that yet"), and the GM applies them itself, which keeps the state consistent. Direct editing can wait until table talk proves not to be enough.
-- **Does Ref2VA hold a Z-Image likeness?** Test it with a hand-made portrait before building the handoff: generate one NPC, use it as a reference in Video Studio, and check the face survives into the clip.
+- **Does Ref2VA hold a Z-Image likeness?** The portrait itself is proven (see the measurements above). Still to check before building the handoff: use a portrait as a reference in Video Studio and confirm the face survives into the clip.
 - **Dice.** A DM leans on dice for uncertain outcomes. The GM could roll for risky attempts and show the roll in the transcript, which would make "the world decides" feel fair rather than arbitrary. Worth trying once the core loop works.
