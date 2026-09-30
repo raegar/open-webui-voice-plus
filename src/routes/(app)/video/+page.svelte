@@ -144,6 +144,8 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 	// Motion slot: off, or one of the interchangeable motion LoRAs.
 	let motionLoraChoice: 'off' | 'hmmotion' | 'm3_unlocked' = 'off';
 	$: motionLora = motionLoraChoice !== 'off';
+	// Style slot: a look LoRA that combines with motion and turbo.
+	let styleLoraChoice: 'off' | 'flat_anime' = 'off';
 	let turboLora = true;
 	let duration: Duration = 10;
 	let seed: string | number | null = '';
@@ -1291,6 +1293,7 @@ Write the final MiniMax H3 production brief now.`
 				mode: workflowMode === 'reference' ? 'reference' : 'text',
 				motion_lora: motionLora,
 				...(motionLoraChoice !== 'off' ? { motion_lora_variant: motionLoraChoice } : {}),
+				...(styleLoraChoice !== 'off' ? { style_lora: styleLoraChoice } : {}),
 				turbo_lora: turboLora,
 				aspect_ratio: aspectRatio,
 				megapixels,
@@ -1955,10 +1958,41 @@ Write the final MiniMax H3 production brief now.`
 									More motion. One at a time, strength 1.0.
 								</span>
 							</fieldset>
+							<fieldset class="text-xs">
+								<legend class="font-medium">Style LoRA</legend>
+								<div class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+									<label class="flex items-center gap-1.5">
+										<input
+											type="radio"
+											name="style-lora"
+											value="off"
+											class="size-3.5 accent-gray-700"
+											bind:group={styleLoraChoice}
+										/>
+										Off
+									</label>
+									<label class="flex items-center gap-1.5">
+										<input
+											type="radio"
+											name="style-lora"
+											value="flat_anime"
+											class="size-3.5 accent-gray-700"
+											bind:group={styleLoraChoice}
+										/>
+										FlatAnime
+									</label>
+								</div>
+								<span class="mt-0.5 block text-gray-500">
+									Changes the look, and combines with a motion LoRA and turbo. Strength 1.0.
+									{#if styleLoraChoice === 'flat_anime' && videoStyle !== 'anime'}
+										Pairs best with the Anime filming style.
+									{/if}
+								</span>
+							</fieldset>
 							<p class="text-[11px] text-gray-500">
-								{motionLora || turboLora
+								{motionLora || turboLora || styleLoraChoice !== 'off'
 									? 'euler / 12 steps / shift 6 — the same for every combination, so switching one changes only which weights load.'
-									: 'Both off: the original 20-step res_multistep result.'}
+									: 'All off: the original 20-step res_multistep result.'}
 							</p>
 						</div>
 					</div>

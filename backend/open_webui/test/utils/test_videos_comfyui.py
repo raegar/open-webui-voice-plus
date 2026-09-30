@@ -371,6 +371,51 @@ def test_default_variant_is_still_hmmotion():
     assert MOTION_LORAS["hmmotion"][0] == MOTION_LORA_NAME
 
 
+def test_style_lora_alone_chains_from_the_unet_and_retunes_the_sampler():
+    workflow = build_minimax_h3_workflow("p", "9:16", 0.2, 10, 1, style_lora="flat_anime")
+    assert _loras(workflow) == ["FlatAnime_MiniMax_H3.safetensors"]
+    assert workflow["904"]["inputs"]["model"] == ["105:6", 0]
+    assert workflow["904"]["inputs"]["strength_model"] == 1.0
+    assert workflow["903"]["inputs"]["model"] == ["904", 0]
+    # Any LoRA takes the accelerated path, so the A/B still isolates the weights.
+    assert workflow["105:17"]["inputs"]["sampler_name"] == "euler"
+    assert workflow["105:9"]["inputs"]["steps"] == 12
+
+
+def test_style_lora_sits_between_motion_and_turbo():
+    workflow = build_minimax_h3_workflow(
+        "p",
+        "9:16",
+        0.2,
+        10,
+        1,
+        motion_lora=True,
+        turbo_lora=True,
+        motion_lora_variant="m3_unlocked",
+        style_lora="flat_anime",
+    )
+    assert workflow["901"]["inputs"]["model"] == ["105:6", 0]
+    assert workflow["904"]["inputs"]["model"] == ["901", 0]
+    assert workflow["902"]["inputs"]["model"] == ["904", 0]
+    assert workflow["903"]["inputs"]["model"] == ["902", 0]
+    assert workflow["105:16"]["inputs"]["model"] == ["903", 0]
+
+
+def test_style_lora_applies_to_the_reference_workflow():
+    workflow = build_minimax_h3_reference_workflow(
+        "p", "9:16", 0.2, 10, 1, ["a.png"], turbo_lora=True, style_lora="flat_anime"
+    )
+    assert _loras(workflow) == ["FlatAnime_MiniMax_H3.safetensors", TURBO_LORA_NAME]
+    assert workflow["904"]["inputs"]["model"] == ["127", 0]
+    assert workflow["126"]["inputs"]["model"] == ["903", 0]
+    assert workflow["124"]["inputs"]["model"] == ["903", 0]
+
+
+def test_unknown_style_lora_is_rejected():
+    with pytest.raises(ValueError):
+        build_minimax_h3_workflow("p", "9:16", 0.2, 10, 1, style_lora="nope")
+
+
 def test_unknown_motion_variant_is_rejected():
     with pytest.raises(ValueError):
         build_minimax_h3_workflow(

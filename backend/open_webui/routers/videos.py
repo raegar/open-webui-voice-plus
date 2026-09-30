@@ -57,6 +57,8 @@ class CreateVideoForm(BaseModel):
     motion_lora: bool = False
     # Which file fills the motion slot when motion_lora is on.
     motion_lora_variant: Literal["hmmotion", "m3_unlocked"] = "hmmotion"
+    # Optional look LoRA in its own slot; combines with motion and turbo.
+    style_lora: Optional[Literal["flat_anime"]] = None
     turbo_lora: bool = True
     seed: Optional[int] = Field(default=None, ge=0, le=2**63 - 1)
     # Filming style the brief was drafted with. The studio owns the catalogue; the
@@ -506,6 +508,7 @@ async def video_generations(
         form_data.motion_lora,
         form_data.turbo_lora,
         motion_lora_variant=form_data.motion_lora_variant,
+        style_lora=form_data.style_lora,
     )
     generation_seconds = round(time.monotonic() - render_started, 1)
     generation_metadata = {
@@ -528,6 +531,7 @@ async def video_generations(
         "motion_lora": form_data.motion_lora,
         "motion_lora_variant": form_data.motion_lora_variant,
         "turbo_lora": form_data.turbo_lora,
+        "style_lora": form_data.style_lora,
         "generation_seconds": generation_seconds,
     }
     file_item, url = _upload_video(

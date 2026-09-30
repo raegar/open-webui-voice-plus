@@ -16,6 +16,8 @@ export type VideoGenerationOptions = {
 	reference_audio_data_urls?: string[];
 	motion_lora?: boolean;
 	motion_lora_variant?: 'hmmotion' | 'm3_unlocked';
+	// Look LoRA in its own slot; combines with motion and turbo.
+	style_lora?: 'flat_anime';
 	turbo_lora?: boolean;
 };
 
