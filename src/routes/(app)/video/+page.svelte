@@ -2095,7 +2095,11 @@ Write the final MiniMax H3 production brief now.`
 					></textarea>
 					<div class="mt-3 flex justify-end">
 						<button
-							class="rounded-xl border border-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-850"
+							class="rounded-xl border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed {!productionPrompt.trim()
+								? 'border-transparent bg-gray-200 text-gray-500 dark:bg-gray-800 dark:text-gray-500'
+								: !promptApproved
+									? 'border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700'
+									: 'border-gray-300 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-850'}"
 							disabled={!productionPrompt.trim()}
 							on:click={approvePrompt}
 						>
