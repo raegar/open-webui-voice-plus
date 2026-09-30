@@ -199,19 +199,26 @@ Production T2V/I2V prompts use contiguous `[Xs-Ys]` segments covering the exact 
 
 ### Autostart and crash watchdog
 
-ComfyUI is a native Windows install at `C:\AI\ComfyUI-H3`, not a container. It is launched by the scheduled task `ComfyUI-H3-Autostart`, which runs `start_h3_autostart.bat` — the same flags as `start_h3.bat` but without `--auto-launch` and without `pause`.
+ComfyUI is a native Windows install at `C:\AI\ComfyUI-H3`, not a container. Two scheduled tasks keep it up, and the split between them is deliberate:
 
-The task has two triggers: at logon (30 s delay), and a time trigger repeating every 5 minutes indefinitely. That repetition is the crash watchdog. `start_h3_autostart.bat` opens with a `netstat` guard that exits 0 when something is already listening on 8188, so a tick while ComfyUI is healthy is a no-op and only a tick after a crash actually launches it. Keep the repetition on one trigger only — putting it on both fires the task twice per interval.
+| Task | Principal | Triggers | Action |
+| --- | --- | --- | --- |
+| `ComfyUI-H3-Autostart` | S4U (`jamie`) | logon (30 s delay) + every 5 min | `powershell.exe ... -File C:\AI\ComfyUI-H3\watchdog_guard.ps1` |
+| `ComfyUI-H3-Launch` | Interactive (`jamie`) | none — run on demand | `cmd.exe /c start "MiniMax H3 - ComfyUI" /min cmd.exe /c C:\AI\ComfyUI-H3\start_h3_autostart.bat` |
 
-Task Scheduler's own `RestartCount` cannot do this job: the action returns as soon as it has spawned the process, so every run is recorded as success and a crash never looks like a failure.
+`watchdog_guard.ps1` checks whether ComfyUI is up and, only if it is not, calls `schtasks /run /tn ComfyUI-H3-Launch`. The guard never shows a window; the launcher is the only part allowed to.
 
-**The action must invoke the batch file through `cmd.exe /c`:**
+**Why the guard runs S4U.** A task with an interactive logon type runs in the user's desktop session, so whatever it starts puts a console on screen — a visible flash every 5 minutes, which is intolerable while screen recording. An S4U ("run whether user is logged on or not") principal runs it off-session with no window at all. Setting an S4U principal **requires elevation**; `Set-ScheduledTask` from a normal session fails with `Access is denied`. There is a `watchdog_guard.vbs` beside the script that achieves the same hiding through `wscript.exe` (a GUI-subsystem host, so no console is created) without needing elevation. It is unreferenced while S4U is in place and kept only as a fallback, since VBScript is deprecated in Windows 11.
 
-```text
-cmd.exe /c start "MiniMax H3 - ComfyUI" /min cmd.exe /c C:\AI\ComfyUI-H3\start_h3_autostart.bat
-```
+**Why the launcher is a separate task.** ComfyUI's own console should be visible when it genuinely starts, and only then. Keeping the launch in its own on-demand task also means the guard can stay silent and window-free without hiding ComfyUI itself.
 
-`START` runs a *batch file* with `cmd /k`, which deliberately leaves the console window open after the script exits — documented in `start /?`. Pointing the action straight at the `.bat` therefore strands a dead window on the desktop at every no-op tick, twelve an hour. Naming `cmd.exe` as the target makes `START` treat it as a program and use `/c`, so the window closes. The tradeoff is that a failed launch no longer leaves its error on screen; read `user\comfyui.log` and the Windows Application event log instead.
+**The launcher action must invoke the batch file through `cmd.exe /c`.** `START` runs a *batch file* with `cmd /k`, which deliberately leaves the console open after the script exits — documented in `start /?`. Pointing the action straight at the `.bat` strands a dead window on every launch. Naming `cmd.exe` as the target makes `START` treat it as a program and use `/c`. The tradeoff is that a failed launch no longer leaves its error on screen; read `user\comfyui.log` and the Windows Application event log instead.
+
+**Two guards against duplicate copies.** `watchdog_guard.ps1` checks the listening port *and* for a running `python.exe main.py`, because the port binds before model loading finishes and a tick in that gap would otherwise fire a second copy that loads models, fails to bind, and exits. `start_h3_autostart.bat` repeats the port check itself, so a manual run is safe too. Task Scheduler's `MultipleInstances` cannot help here: the launcher's action returns as soon as `start` has spawned the process.
+
+Task Scheduler's own `RestartCount` cannot do the watchdog's job either, for the same reason — every run is recorded as success, so a crash never looks like a failure.
+
+Keep the 5-minute repetition on one trigger only. Putting it on both the logon and time triggers fires the task twice per interval.
 
 ComfyUI crashes are a known, separate problem: `python.exe` / `python312.dll`, exception `0xC0000005`, typically during VAE decode, on a 32 GB machine using the launcher's conservative sub-48 GB flag path. The watchdog restores the service within 5 minutes, but any generation in flight is lost.
 
@@ -219,7 +226,7 @@ ComfyUI crashes are a known, separate problem: `python.exe` / `python312.dll`, e
 
 ## OpenRouter preset connections
 
-Two OpenRouter presets are wired into chat: `@preset/deep-seek-rp` (resolves to `deepseek/deepseek-v3.2`) and `@preset/glmrp` (resolves to `z-ai/glm-5.2`). OpenRouter accepts a preset as the model string in the form `@preset/<slug>` or `<provider>/<model>@preset/<slug>`, and OWUI forwards the model string verbatim, stripping only a configured `prefix_id`.
+Several OpenRouter presets are wired into chat, all on one connection — `@preset/deep-seek-rp` and `@preset/deep-seek-rpx` (DeepSeek V3.2), `@preset/glmrp` (GLM 5.2), `@preset/mimo-rpx` (MiMo V2.5), `@preset/gemma-rpx` (Gemma 4 31B) and others added through the admin UI. OpenRouter accepts a preset as the model string in the form `@preset/<slug>` or `<provider>/<model>@preset/<slug>`, and OWUI forwards the model string verbatim, stripping only a configured `prefix_id`.
 
 They live on a **second** OpenRouter connection whose `model_ids` list holds nothing but the preset strings. This matters: when a connection's `model_ids` is non-empty, `get_all_models` stops calling `/models` for that connection and synthesises the list from those strings alone (`backend/open_webui/routers/openai.py`). Adding a preset to the existing catalogue connection would collapse OpenRouter down to that one entry. The catalogue connection keeps an empty `model_ids`; the preset connection carries the same base URL and key. New presets are appended to the preset connection's list rather than given a connection of their own.
 
