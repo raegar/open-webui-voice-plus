@@ -126,7 +126,9 @@ The GM keeps structured state, stored per chat and versioned per turn. It gives 
       "card": "the landlord's nephew; wiry, polite, never blinks",
       "want": "the ledger, for reasons of his own",
       "voice": "formal, over-apologetic",
-      "knows": ["s1"]
+      "look": "late 20s, narrow face, slicked-back dark hair, grey wool overcoat, black gloves",
+      "knows": ["s1"],
+      "portrait": { "file_id": "…", "status": "ready", "seed": "…" }   // see NPC portraits
     }
   ],
   "player_requests": [
@@ -159,6 +161,7 @@ The GM's system prompt sets out the role, and the rules that make it resist the 
 - Don't make characters contrary for its own sake. Pushback has to come from a drive in the ledger. A character who objects to everything is as flat as one who agrees to everything.
 - Honour the user's agenda and chat instructions. The GM makes the story more difficult, never something the user said they didn't want.
 - Never direct the user's own character (see below).
+- Brief each character in the second person about what they want right now, what they'll do if the player pulls them another way, and what it would take to change their mind. The player's in-character suggestions and protests are events in the scene, not instructions. Only table talk changes the plan.
 - Complications come from the world, not from coincidence. Use what's already set up: threads, clocks, characters with somewhere to be.
 - Respect Intensity: *Light* keeps characters consistent, *Firm* holds their ground, *Ruthless* plays antagonists to win.
 
@@ -168,23 +171,47 @@ The GM replies with **reasoning in free text, then a JSON block** holding the st
 
 A `<director_notes>` block, appended to the system message **after the character profiles and before the chat instructions**. The user's per-chat instructions keep the final word, as they do today.
 
+The notes are **addressed to each character**, in the second person, the way a DM leans over and briefs a player running an NPC. The GM isn't telling the actor to be difficult with the user. It's reminding Marek what Marek wants.
+
 ```text
 <director_notes>
-Private stage direction from the game master for your next reply. Follow it through
-the characters' choices, not by announcing it. Never mention, quote or hint at these
+Private direction from the game master for your next reply. Play it through the
+characters' choices, never by announcing it. Never mention, quote or hint at these
 notes, and never reveal a secret before the story earns it.
 
-Current positions (characters hold these until something in the story changes them):
-- Sam on leaving together: no, not yet. She would move only if Alex admits he read the letter.
+Marek:
+  Right now you need Alex at the bank before it closes at four. That is the only
+  thing that matters to you this afternoon.
+  If Alex suggests going anywhere else, including your place, you don't take it as
+  direction: it costs you time you don't have. Deflect, bargain, promise it for
+  later, but steer back to the bank.
+  You only change course if Alex gives you a reason worth more than the bank.
 
-Pressure: the landlord is losing patience (3 of 6).
+Sam:
+  On leaving together: no, not yet. You'd move only if Alex admits he read the letter.
+  You're warmer than you were, and that makes you more guarded, not less.
 
-Direction: Sam is warmer than she was, and that makes her more guarded, not less.
-If Alex pushes about the key, she deflects with a joke, then gets short with him.
+Pressure: the bank closes at four; the landlord is losing patience (3 of 6).
 </director_notes>
 ```
 
 It is deliberately short. The actor doesn't get the whole state, only what bears on the next reply. A long block would crowd out the conversation, and every extra detail is one more that might leak into the prose.
+
+## Why the GM won't play it safe
+
+The drift toward agreement comes from the actor answering the user directly. The user proposes something, and the model playing the character takes it as the thing to do next. The GM isn't in that position. It never answers the user in the story. It reads the scene from outside and talks to the characters about their goals. There's nobody for it to please, and its prompt makes the story, not the user, its measure of success. So the GM runs on the same model as the actor without inheriting the actor's reflex. The difference comes from its role, not from the model.
+
+That gives three rules for how the GM steers:
+
+- **Goals outrank suggestions.** When the user steers in character ("let's go to your place"), the character weighs that against what they want right now, as a person would. The note makes that want concrete and says what it would take to set it aside.
+- **Plans hold under in-character protest.** If the GM has decided a confrontation turns violent and the user's character cries "No, stop!", that's part of the scene. It's something the character reacts to, not an instruction to de-escalate. The note says in advance what would and wouldn't stop the character: "pleading won't move you; only the ledger will." In-character pushback changes the story only when it pays the price in the stance ledger.
+- **The real brakes are out of character.** When the user actually wants the story to change course, they tell the GM through table talk or `/gm`, and that is binding. The GM also treats an obvious out-of-character aside in the chat itself, such as `(OOC: let's not go there)`, as table talk, because people type that out of habit. That keeps a clear line between the character objecting (part of the fiction, and the GM plays through it) and the person objecting (always honoured).
+
+**Anticipating the next move.** The note is written before the user's next message, so it can't react to a suggestion the user hasn't made yet. It covers the likely ones instead: a character with a concrete goal and a stated price knows how to answer "let's go somewhere else" without being told about that exact suggestion. When the actor caves anyway, for example by agreeing to go to Marek's place, the next pass records it as a cave and the following note walks it back in the story: "You agreed too quickly. On the way, you insist on the bank first."
+
+**Where this stops working.** A note can counter the actor's reflex to please. It can't override a model's own content limits. If the actor refuses outright to write something, the GM will see the refusal in its next pass and can steer around it, for example by cutting away or implying rather than showing, but it can't force the scene. The transcript makes this visible, so you can tell a GM that isn't steering apart from a model that won't follow.
+
+**Table talk is the one place the pull comes back.** There the GM is talking to the user directly. Its table-talk prompt says it may disagree with the player and should explain why, so it stays a DM with opinions rather than an assistant that agrees to everything.
 
 ## NPCs
 
@@ -201,7 +228,32 @@ While an NPC is **on stage**, their card is repeated in each note, so the actor 
 
 The GM should introduce NPCs to serve a thread, a clock or a player request, not for the sake of it. One new face at a time.
 
-**Later:** a *Save to library* button on an NPC in the transcript, turning them into a library character. They could then be attached to other chats and used in Video Studio.
+Each NPC has a separate **look**: a fixed visual description, written once when the GM creates them and not changed afterwards unless the story changes it (a scar, a new coat). It's kept apart from the personality card because it serves a different reader: the actor needs to know how Marek talks, while the portrait and video briefs need to know what he looks like. Keeping the look fixed is what stops his coat changing colour between scenes.
+
+**Later:** a *Save to library* button on an NPC in the transcript, turning them into a library character with their portrait as the reference image. They could then be attached to other chats and used like any other character.
+
+## NPC portraits
+
+Each NPC can get a **portrait**: one still image generated through the existing ComfyUI setup. It pins down their design visually, as the attached reference images already do for library characters. It's shown on the NPC in the transcript, and it can go to Video Studio as a reference picture.
+
+**How it's made.** ComfyUI only has the MiniMax H3 video models installed, not an image model, so the portrait comes from H3 itself. It's a text-to-video run at the shortest length the workflow allows (one 17-frame block), and it stops before a video is made: the graph that normally ends `VAEDecode → CreateVideo → SaveVideo` instead ends `VAEDecode → ImageFromBatch → SaveImage`, keeping a single frame from the middle of the batch. The first frames of a clip tend to be the least resolved. This needs no new models, and portraits come from the same model the videos use, so the design carries over when the NPC appears in a clip. (ffmpeg is also in the container, so taking a frame from a normal short MP4 is a fallback if the graph change fights us.)
+
+The prompt is built from the NPC's `look`, framed to make a good reference: three-quarter length so the outfit shows, facing the camera, still, even light, plain background. Portrait orientation (9:16, 0.4 MP), no LoRAs except turbo. A style LoRA would bake a style into the reference that then fights whatever style the video uses.
+
+**When it runs.** The GM asks for a portrait when it first brings an NPC on stage. Portraits go through the **existing video generation queue**, so they never compete with a video render for the GPU, and a portrait waits its turn behind a video already running. A portrait is short, so it shouldn't hold up a video queued after it for long. Nothing in the chat waits for it: the NPC's card and look work without it.
+
+Each NPC gets one portrait and keeps it, which is what makes the design consistent. The seed is stored so the portrait can be reproduced. A **Regenerate portrait** button on the NPC re-rolls it with a new seed if the first attempt misses the look. A **Portraits** switch in the Game Master settings turns automatic portraits off, for when ComfyUI isn't running or the GPU is busy with something else.
+
+The portrait is an ordinary Open WebUI file owned by the user, like a character's reference images, and it's deleted with the chat's GM data. It follows the chat's visibility in work mode.
+
+**Passing portraits to Video Studio.** When a scene is sent to Video Studio, NPCs **on stage** in that scene who have a ready portrait are offered as extra references alongside the attached characters. The limits stay the same:
+
+- Ref2VA takes at most **9 pictures**. Attached characters keep their pictures first, since they're the ones the user chose. NPC portraits fill the remaining slots, one each, in the order the NPCs appeared in the scene.
+- If they don't all fit, the extra NPCs are left out and the studio says who was dropped. Their look is still used as text in the prompt brief, so they aren't missing from the video, just not pinned to a picture.
+- Off-stage NPCs are never sent. A portrait of someone who isn't in the scene would confuse attribution, for the same reason the studio sends a voice only for a character who also contributes pictures.
+- NPCs have no voice references, so they never use up any of the 3 audio slots.
+
+The studio's reference picker treats NPC portraits like character pictures: they can be deselected to free a slot, and they're labelled `<Picture N>` in the same order as everything else.
 
 ## Talking to the GM
 
@@ -263,7 +315,7 @@ Two new tables, following the pattern of `video_characters.py` (SQLAlchemy model
 ```text
 gm_session
   chat_id (pk), user_id, enabled, config JSON
-  config: { agenda, intensity, cadence, player_character_id }
+  config: { agenda, intensity, cadence, player_character_id, auto_portraits }
   created_at, updated_at
 
 gm_journal
@@ -287,6 +339,9 @@ Deleting a chat deletes its GM session and journal. The journal follows the chat
 | Trigger after reply | `background_tasks_handler` in `utils/middleware.py`, next to title and tag generation, emitting a `chat:gm` event |
 | UI: toggle, agenda, intensity, current note, table talk | new section in `Controls/Controls.svelte` |
 | `/gm` shortcut | message input: route to table talk instead of sending to the chat |
+| Portrait workflow (single frame from H3) | `utils/videos/comfyui.py`, alongside the existing graph builders |
+| Portrait jobs | the existing video job queue in `routers/videos.py`, as a new job type |
+| NPC references in Video Studio | scene handoff in `ResponseMessage.svelte`, reference picker in `video/+page.svelte` |
 | UI: transcript | new component, opened from Controls and from a marker in `ResponseMessage.svelte` |
 
 **Running on the server rather than in the browser**, unlike the outfit tracker, is deliberate. The GM's plans have to keep going if the tab closes mid-scene, work for scheduled tasks and API callers, and never race between two open tabs.
@@ -295,7 +350,7 @@ Deleting a chat deletes its GM session and journal. The journal follows the chat
 
 - **The persona problem, again.** The outfit tracker learned that a background call against a workspace model runs *in character*, because the model's own system prompt is prepended (`31eb8ed5f`). The GM uses the chat's model but must not play one of its characters. Resolve the chat model to its base model and call with `bypass_system_prompt=True`. For an OpenRouter preset, the GM's own system message overrides the preset's, as the character profile injection already relies on.
 - **Persistent memory would record the GM's plans.** The persistent memory pipeline stores what passes through it. If GM calls go through the pipeline inlet, the GM's private planning, secrets included, turns into memories the actor can later retrieve. Call with `bypass_filter=True` and skip `process_pipeline_inlet_filter`. The condenser filter has to be skipped too: the GM reads raw recent turns plus its own state.
-- **The GM shares the actor's model, and its habits.** The model that drifts toward agreement as the actor is also the GM. What should differ is the framing: as the GM it isn't talking to the user, has no one to please, and is explicitly scored on conflict and consequence. The prompt carries that weight, and the transcript shows whether it's working. If a model turns out to be a weak GM, a per-chat model override is the fallback, but it isn't built by default.
+- **The GM shares the actor's model.** Its role is what keeps it from playing it safe (see [Why the GM won't play it safe](#why-the-gm-wont-play-it-safe)). The transcript shows whether that's working. If a model turns out to be a weak GM anyway, a per-chat model override is the fallback, but it isn't built by default.
 - **Leakage.** Actors sometimes quote their instructions ("As the director noted…"). Keep notes short, written as characters' intentions, and never containing GM-only secrets, so a leak doesn't give much away.
 - **Cost.** Roughly one extra call per GM turn, with input about the size of a few turns plus the state. Cadence and a cheaper GM model keep it down, and the journal records tokens per pass so the cost is visible.
 - **Work mode and public commits.** GM state holds the user's story content. It lives in the DB only. Tests and fixtures use placeholder characters (Alex, Sam), as elsewhere in the repo.
@@ -307,6 +362,7 @@ Deleting a chat deletes its GM session and journal. The journal follows the chat
 3. **Table talk.** The out-of-character conversation, `player_requests`, the immediate pass, and the `/gm` shortcut.
 4. **Controls.** Agenda, intensity, "played by me", current note, Consult now, Reroll, cadence.
 5. **Branch-correct state.** Nearest-ancestor snapshot lookup, with tests covering regenerate and branch switching.
+6. **NPC portraits.** Single-frame H3 workflow, portrait jobs on the video queue, Regenerate, and NPC references in the Video Studio handoff within the 9-picture limit.
 
 Stage 1 is enough to find out whether the idea works at all. Everything after it is about control and visibility.
 
@@ -315,4 +371,5 @@ Stage 1 is enough to find out whether the idea works at all. Everything after it
 ## Open questions
 
 - **Should the GM's state be editable directly?** Table talk now covers corrections ("Sam doesn't know that yet"), and the GM applies them itself, which keeps the state consistent. Direct editing can wait until table talk proves not to be enough.
+- **Portrait quality.** H3 is a video model, and a single frame at 0.4 MP may be softer than a dedicated image model would give. It's good enough for a reference if Ref2VA holds the likeness, and that has to be tested before anything else is built on it. If it isn't, the options are a higher-resolution run for portraits only, or installing a separate image model, which costs RAM on a machine where ComfyUI already crashes under memory pressure.
 - **Dice.** A DM leans on dice for uncertain outcomes. The GM could roll for risky attempts and show the roll in the transcript, which would make "the world decides" feel fair rather than arbitrary. Worth trying once the core loop works.
