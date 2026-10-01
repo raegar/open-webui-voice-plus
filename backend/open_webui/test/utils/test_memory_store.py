@@ -115,3 +115,54 @@ def test_a_missing_store_says_where_it_looked(tmp_path):
 def test_summary_counts_by_source(store):
     summary = store.summary()
     assert (summary["total"], summary["recorded"], summary["imported"]) == (4, 3, 1)
+
+
+def fake_sources():
+    from open_webui.utils.memory_characters import content_key
+
+    # m1 and m2 are in a chat with Sam and Alex attached; m4's chat talks to a persona.
+    index = {
+        content_key("Sam hides the key"): "chat-1",
+        content_key("Alex finds a 50% discount"): "chat-1",
+        content_key("Sam leaves the harbour"): "chat-2",
+    }
+    return index, {"chat-1": ["Sam", "Alex"], "chat-2": ["Marek"]}, ["Sam", "Alex", "Marek"]
+
+
+def test_memories_carry_their_characters_and_filter_by_them(store):
+    assert store.sync_characters(fake_sources) == 4
+    # Already linked: nothing new to do.
+    assert store.sync_characters(fake_sources) == 0
+
+    by_id = {item["message_id"]: item["characters"] for item in store.search()["items"]}
+    assert by_id["m1"] == [{"name": "Alex", "how": "chat"}, {"name": "Sam", "how": "chat"}]
+    assert by_id["m4"] == [{"name": "Marek", "how": "chat"}]
+    assert by_id["m3"] == []
+
+    assert ids(store.search(include=["Marek"])) == ["m4"]
+    assert ids(store.search(include=["Marek", "Alex"])) == ["m4", "m2", "m1"]
+    assert ids(store.search(exclude=["Sam"])) == ["m4", "m3"]
+    assert ids(store.search(include=["Sam"], exclude=["Marek"], role="assistant")) == ["m2"]
+
+    summary = store.summary()
+    assert summary["unindexed"] == 0
+    assert {c["name"]: c["count"] for c in summary["characters"]} == {"Alex": 2, "Sam": 2, "Marek": 1}
+
+
+def test_deleting_a_memory_drops_its_links(store):
+    store.sync_characters(fake_sources)
+    store.delete(["m4"])
+    assert ids(store.search(include=["Marek"])) == []
+    assert all(c["name"] != "Marek" for c in store.summary()["characters"])
+
+
+def test_a_full_relink_replaces_old_links(store):
+    store.sync_characters(fake_sources)
+
+    def relinked():
+        index, _, names = fake_sources()
+        return index, {"chat-1": ["Nell"], "chat-2": []}, names
+
+    assert store.sync_characters(relinked, full=True) == 4
+    assert ids(store.search(include=["Nell"])) == ["m2", "m1"]
+    assert ids(store.search(include=["Sam"])) == []

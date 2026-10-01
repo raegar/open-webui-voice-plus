@@ -1,16 +1,18 @@
 """Browse and prune the persistent memory pipeline's recorded messages.
 
 Admin only: the pipeline keeps one store for every account, with no user ids, so
-nothing here can be scoped to the caller. See utils/memory_store.py.
+nothing here can be scoped to the caller. See utils/memory_store.py, and
+utils/memory_characters.py for how memories are linked to characters.
 """
 
 import asyncio
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from open_webui.utils.auth import get_admin_user
+from open_webui.utils.memory_characters import load_owui_sources
 from open_webui.utils.memory_store import MAX_BULK_DELETE, MemoryStore
 
 
@@ -28,8 +30,19 @@ async def _run(fn, *args, **kwargs):
 
 @router.get("/summary")
 async def memory_summary(user=Depends(get_admin_user)):
+    """Counts and the character list, after linking any memories recorded since."""
     store = MemoryStore()
-    return {"path": store.path, **(await _run(store.summary))}
+    linked = await _run(store.sync_characters, load_owui_sources)
+    return {"path": store.path, "linked": linked, **(await _run(store.summary))}
+
+
+@router.post("/characters/relink")
+async def relink_memory_characters(user=Depends(get_admin_user)):
+    """Rebuild every memory's character links, e.g. after attaching characters to
+    chats that already had memories."""
+    store = MemoryStore()
+    linked = await _run(store.sync_characters, load_owui_sources, True)
+    return {"linked": linked, **(await _run(store.summary))}
 
 
 @router.get("/messages")
@@ -40,6 +53,8 @@ async def list_memories(
     since: Optional[str] = None,
     until: Optional[str] = None,
     conversation_id: str = "",
+    include: list[str] = Query(default=[]),
+    exclude: list[str] = Query(default=[]),
     order: Literal["newest", "oldest"] = "newest",
     offset: int = 0,
     limit: int = 50,
@@ -53,6 +68,8 @@ async def list_memories(
         since=since or None,
         until=until or None,
         conversation_id=conversation_id,
+        include=include,
+        exclude=exclude,
         order=order,
         offset=offset,
         limit=limit,

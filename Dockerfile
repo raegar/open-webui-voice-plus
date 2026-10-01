@@ -63,6 +63,7 @@ RUN sed -i 's/^    privacy,$/    privacy,\n    game_master,/' /app/backend/open_
     && grep -q 'include_router(game_master.router' /app/backend/open_webui/main.py
 # Memories browser over the persistent memory pipeline's store, registered after game_master.
 COPY --from=builder /build/backend/open_webui/utils/memory_store.py /app/backend/open_webui/utils/memory_store.py
+COPY --from=builder /build/backend/open_webui/utils/memory_characters.py /app/backend/open_webui/utils/memory_characters.py
 COPY --from=builder /build/backend/open_webui/routers/memory_browser.py /app/backend/open_webui/routers/memory_browser.py
 RUN sed -i 's/^    game_master,$/    game_master,\n    memory_browser,/' /app/backend/open_webui/main.py \
     && sed -i "s|app.include_router(game_master.router, prefix='/api/v1/gm', tags=\['game-master'\])|app.include_router(game_master.router, prefix='/api/v1/gm', tags=['game-master'])\napp.include_router(memory_browser.router, prefix='/api/v1/memory-browser', tags=['memory-browser'])|" /app/backend/open_webui/main.py \

@@ -7,7 +7,17 @@ export type MemorySummary = {
 	imported: number;
 	first: string | null;
 	last: string | null;
+	/** Characters memories are linked to, most memories first. */
+	characters: { name: string; count: number; inferred: number }[];
+	/** Memories not yet linked to characters. */
+	unindexed: number;
+	/** How many memories this request linked. */
+	linked?: number;
 };
+
+/** chat: the memory matched a message in a chat with this character. named: an
+ * imported conversation that names them often enough (inferred). */
+export type MemoryCharacter = { name: string; how: 'chat' | 'named' };
 
 export type Memory = {
 	message_id: string;
@@ -16,6 +26,7 @@ export type Memory = {
 	role: 'user' | 'assistant' | string;
 	content: string;
 	source: 'recorded' | 'imported';
+	characters: MemoryCharacter[];
 };
 
 export type MemoryFilters = {
@@ -25,6 +36,8 @@ export type MemoryFilters = {
 	since?: string;
 	until?: string;
 	conversation_id?: string;
+	include?: string[];
+	exclude?: string[];
 	order?: 'newest' | 'oldest';
 	offset?: number;
 	limit?: number;
@@ -62,7 +75,8 @@ export const searchMemories = async (
 ): Promise<{ total: number; items: Memory[] }> => {
 	const params = new URLSearchParams();
 	for (const [key, value] of Object.entries(filters)) {
-		if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
+		if (Array.isArray(value)) value.forEach((item) => params.append(key, item));
+		else if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
 	}
 	return await request(token, `/messages?${params.toString()}`);
 };
@@ -72,3 +86,6 @@ export const deleteMemories = async (
 	ids: string[]
 ): Promise<{ deleted: number; conversations_removed: number; backup: string | null }> =>
 	await request(token, '/delete', { method: 'POST', body: JSON.stringify({ ids }) });
+
+export const relinkMemoryCharacters = async (token: string): Promise<MemorySummary> =>
+	await request(token, '/characters/relink', { method: 'POST', body: '{}' });

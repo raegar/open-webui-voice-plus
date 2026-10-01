@@ -5,6 +5,7 @@
 	import {
 		deleteMemories,
 		getMemorySummary,
+		relinkMemoryCharacters,
 		searchMemories,
 		type Memory,
 		type MemoryFilters,
@@ -36,6 +37,9 @@
 	let order: 'newest' | 'oldest' = 'newest';
 	let conversationId = '';
 	let offset = 0;
+	// Character filter: each name is shown only (include), hidden (exclude) or neither.
+	let characterRules: Record<string, 'include' | 'exclude'> = {};
+	let linkingCharacters = false;
 
 	let selected = new Set<string>();
 	let expanded = new Set<string>();
@@ -49,7 +53,18 @@
 	$: workMode = !!$settings?.hidePrivate;
 	$: pageIds = items.map((item) => item.message_id);
 	$: allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
-	$: filtered = !!(q.trim() || role || source || since || until || conversationId);
+	$: included = Object.keys(characterRules).filter((name) => characterRules[name] === 'include');
+	$: excluded = Object.keys(characterRules).filter((name) => characterRules[name] === 'exclude');
+	$: filtered = !!(
+		q.trim() ||
+		role ||
+		source ||
+		since ||
+		until ||
+		conversationId ||
+		included.length ||
+		excluded.length
+	);
 
 	const load = async () => {
 		if (!isAdmin || workMode) return;
@@ -63,6 +78,8 @@
 				since,
 				until,
 				conversation_id: conversationId,
+				include: included,
+				exclude: excluded,
 				order,
 				offset,
 				limit: PAGE_SIZE
@@ -109,7 +126,31 @@
 		since = '';
 		until = '';
 		conversationId = '';
+		characterRules = {};
 		filtersChanged();
+	};
+
+	// Click cycles a character: show only theirs, then hide theirs, then neither.
+	const cycleCharacter = (name: string) => {
+		const next = { ...characterRules };
+		if (!next[name]) next[name] = 'include';
+		else if (next[name] === 'include') next[name] = 'exclude';
+		else delete next[name];
+		characterRules = next;
+		filtersChanged();
+	};
+
+	const relink = async () => {
+		linkingCharacters = true;
+		try {
+			summary = await relinkMemoryCharacters(localStorage.token);
+			toast.success(`Re-linked ${count(summary.linked ?? 0)} memories to their characters.`);
+			await load();
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			linkingCharacters = false;
+		}
 	};
 
 	const showConversation = (id: string) => {
@@ -329,6 +370,43 @@
 							>
 						</div>
 					{/if}
+
+					{#if summary?.characters?.length}
+						<div class="flex flex-col gap-1.5 border-t border-gray-100 pt-2 dark:border-gray-850">
+							<div class="flex flex-wrap items-baseline gap-x-2 text-xs text-gray-500">
+								<span>Characters: click once to show only theirs, again to hide theirs.</span>
+								<Tooltip
+									content="Links memories to characters again from scratch, for example after attaching characters to older chats. New memories are linked automatically."
+								>
+									<button
+										class="hover:text-gray-800 disabled:opacity-40 dark:hover:text-gray-200"
+										disabled={linkingCharacters}
+										on:click={relink}
+										>{linkingCharacters ? 'Re-linking…' : 'Re-link characters'}</button
+									>
+								</Tooltip>
+							</div>
+							<div class="flex flex-wrap gap-1.5">
+								{#each summary.characters as character (character.name)}
+									{@const rule = characterRules[character.name]}
+									<button
+										class="rounded-full border px-2.5 py-0.5 text-xs transition {rule === 'include'
+											? 'border-green-400 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950/50 dark:text-green-300'
+											: rule === 'exclude'
+												? 'border-red-300 bg-red-50 text-red-700 line-through dark:border-red-800 dark:bg-red-950/40 dark:text-red-300'
+												: 'border-gray-200 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-850'}"
+										title={character.inferred
+											? `${count(character.inferred)} of these are inferred from names in imported conversations`
+											: ''}
+										on:click={() => cycleCharacter(character.name)}
+									>
+										{rule === 'include' ? '✓ ' : rule === 'exclude' ? '✕ ' : ''}{character.name}
+										<span class="text-gray-500">{count(character.count)}</span>
+									</button>
+								{/each}
+							</div>
+						</div>
+					{/if}
 				</section>
 
 				<div class="flex flex-wrap items-center gap-3 text-sm">
@@ -400,6 +478,18 @@
 									</span>
 									<span>{when(memory.timestamp)}</span>
 									<span>· {memory.source === 'recorded' ? 'recorded' : 'imported'}</span>
+									{#each memory.characters ?? [] as character}
+										<span
+											class="rounded-full bg-gray-100 px-2 py-0.5 dark:bg-gray-850 {character.how ===
+											'named'
+												? 'italic'
+												: ''}"
+											title={character.how === 'named'
+												? 'Inferred: this imported conversation names them often'
+												: 'From the chat this message was recorded in'}
+											>{character.how === 'named' ? '~' : ''}{character.name}</span
+										>
+									{/each}
 									{#if !conversationId}
 										<button
 											class="hover:text-gray-800 dark:hover:text-gray-200"
