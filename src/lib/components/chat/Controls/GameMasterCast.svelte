@@ -36,15 +36,26 @@
 		return portrait && portrait.name === npc.name ? portrait : null;
 	};
 
+	// The NPC whose redraw box is open, and what the player wants changed.
+	let redrawing = '';
+	let direction = '';
+
 	const draw = async (npc: any) => {
 		drawing = npc.id;
 		try {
-			onStatus(await regenerateNpcPortrait(localStorage.token, chatId, npc.id));
+			onStatus(await regenerateNpcPortrait(localStorage.token, chatId, npc.id, direction.trim()));
+			redrawing = '';
+			direction = '';
 		} catch (error) {
 			toast.error(`${error}`);
 		} finally {
 			drawing = '';
 		}
+	};
+
+	const openRedraw = (npc: any) => {
+		redrawing = redrawing === npc.id ? '' : npc.id;
+		direction = '';
 	};
 </script>
 
@@ -89,10 +100,31 @@
 							disabled={drawing === npc.id ||
 								portrait?.status === 'queued' ||
 								portrait?.status === 'running'}
-							on:click={() => draw(npc)}
+							on:click={() => openRedraw(npc)}
 						>
-							{portrait ? $i18n.t('Regenerate portrait') : $i18n.t('Draw portrait')}
+							{portrait ? $i18n.t('Regenerate portrait…') : $i18n.t('Draw portrait…')}
 						</button>
+						{#if redrawing === npc.id}
+							<div class="mt-1 flex items-center gap-1.5">
+								<input
+									class="flex-1 min-w-0 rounded-lg bg-gray-50 dark:bg-gray-850 px-2 py-1 outline-hidden"
+									placeholder={$i18n.t('What should change? (optional)')}
+									bind:value={direction}
+									on:keydown={(e) => e.key === 'Enter' && draw(npc)}
+								/>
+								<button
+									class="px-2 py-1 rounded-lg bg-gray-100 dark:bg-gray-850 hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-50"
+									disabled={drawing === npc.id}
+									on:click={() => draw(npc)}>{$i18n.t('Draw')}</button
+								>
+							</div>
+						{/if}
+					{/if}
+					{#if portrait?.prompt}
+						<details class="mt-0.5">
+							<summary class="cursor-pointer text-gray-500">{$i18n.t('Prompt used')}</summary>
+							<div class="text-gray-500 mt-0.5">{portrait.prompt}</div>
+						</details>
 					{/if}
 				</div>
 			</div>

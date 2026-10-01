@@ -247,14 +247,21 @@ async def reroll_game_master(
     return _status(user, chat_id, chat)
 
 
+class PortraitForm(BaseModel):
+    # What should change, e.g. "more menacing, less human". Optional.
+    direction: str = Field(default="", max_length=500)
+
+
 @router.post("/chats/{chat_id}/npcs/{npc_id}/portrait")
 async def regenerate_npc_portrait(
     request: Request,
     chat_id: str,
     npc_id: str,
+    form_data: Optional[PortraitForm] = None,
     user=Depends(get_verified_user),
 ):
-    """Draw an NPC again with a new seed, from their look in the current plan."""
+    """Draw an NPC again with a new seed and a freshly written prompt, from their look
+    in the current plan and any direction the player gives."""
     chat = _chat_or_404(chat_id, user)
     leaf, messages = _leaf(chat)
     index = GameMaster.get_entry_index(user.id, chat_id)
@@ -266,7 +273,14 @@ async def regenerate_npc_portrait(
     ) if current else None
     if not npc:
         raise HTTPException(status_code=404, detail="No such NPC in the current plan")
-    if not await queue_npc_portrait(request, user, chat_id, npc):
+    if not await queue_npc_portrait(
+        request,
+        user,
+        chat_id,
+        npc,
+        model_id=_chat_model(chat, leaf, messages),
+        direction=form_data.direction.strip() if form_data else "",
+    ):
         raise HTTPException(
             status_code=400,
             detail="Portraits need video generation to be enabled, and the NPC needs a look.",

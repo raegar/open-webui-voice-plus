@@ -32,6 +32,8 @@ MAX_PROFILE_CHARS = 1500
 MAX_TOKENS = 8000
 # A table-talk answer is a few sentences.
 TALK_MAX_TOKENS = 2000
+# A portrait prompt is one paragraph; reasoning models need room before it.
+PORTRAIT_PROMPT_TOKENS = 1500
 
 # Bounds on the GM's state, so a runaway model cannot grow it without limit.
 LIMITS = {"npcs": 20, "threads": 10, "clocks": 8, "secrets": 15, "player_requests": 12}
@@ -78,7 +80,7 @@ Principles:
 6. Out-of-character asides from the player, such as "(OOC: ...)", "((...))" or "OOC:", are real direction from the person. Honour them. Record binding ones in player_directives.
 7. The character marked PLAYER belongs to the player. Never decide what they say, think, feel or choose, and never brief them. You do decide how the world responds to what they attempt: whether a lie lands, whether a door opens, whether a risky move succeeds or costs them.
 8. Run the world. Complications grow from what is already set up (threads, clocks, NPCs with their own business), not from coincidence. Advance a clock when the story pushes it. When a clock fills, its consequence happens.
-9. Introduce NPCs as a DM would: when they serve a thread, a clock or the player's agenda, and one new face at a time. Give each a one-line card, a want, a voice, and a fixed visual look (age, build, face, hair, clothing) that stays the same from scene to scene. To bring an NPC in, set their status to "entering": the actor is then required to bring them into the very next reply, and they move on stage automatically once that reply is written. Keep NPCs you are saving for later as "planned". Once the player has asked for someone and you have agreed, do not keep postponing: set them entering.
+9. Introduce NPCs as a DM would: when they serve a thread, a clock or the player's agenda, and one new face at a time. Give each a one-line card, a want, a voice, and a fixed visual look that stays the same from scene to scene, in two to four concrete sentences: for a person, age, build, face, hair and clothing; for anything else, its form, size, texture and colour, how it moves, and what it does to the light and space around it. The look is also what their portrait is drawn from, so make it vivid and specific. To bring an NPC in, set their status to "entering": the actor is then required to bring them into the very next reply, and they move on stage automatically once that reply is written. Keep NPCs you are saving for later as "planned". Once the player has asked for someone and you have agreed, do not keep postponing: set them entering.
 10. Secrets. A character's own secrets can go in their briefing, because an actor must know them to play them. A twist no character knows stays with you until the story earns the reveal, though you can hint at it.
 11. Respect the player's agenda, their directives and the chat instructions. Make the story harder, never into something the player said they do not want.
 12. Pace yourself. Not every turn needs a new event. Some turns the right note is simply: hold your ground.
@@ -1224,7 +1226,7 @@ async def run_gm_pass(
                     duration_ms / 1000,
                 )
                 if session.config.get("auto_portraits", True):
-                    await queue_missing_portraits(request, user, chat_id, new_state)
+                    await queue_missing_portraits(request, user, chat_id, new_state, gm_model)
                 await emit({"status": "done"})
                 return entry
             except Exception as e:
@@ -1441,10 +1443,66 @@ def _can_generate_portraits(request: Any, user: Any) -> bool:
         return False
 
 
+async def write_portrait_prompt(
+    request: Any, user: Any, model_id: str, npc: dict, direction: str = ""
+) -> str:
+    """An image prompt written for this NPC by the chat's own model.
+
+    Falls back to the neutral reference template if there is no model or the model
+    gives nothing usable, so a portrait is always drawn.
+    """
+    from open_webui.utils.chat import generate_chat_completion
+    from open_webui.utils.videos.portrait import (
+        build_portrait_prompt,
+        build_portrait_writer_messages,
+        clean_portrait_prompt,
+    )
+
+    look = _text(npc.get("look"))
+    fallback = build_portrait_prompt(look)
+    try:
+        models = request.app.state.MODELS
+        writer = resolve_gm_model(models, model_id) if model_id else ""
+        if writer not in models:
+            return fallback
+        response = await generate_chat_completion(
+            request,
+            form_data={
+                "model": writer,
+                "messages": build_portrait_writer_messages(
+                    _text(npc.get("name")), _text(npc.get("card")), look, _text(direction)
+                ),
+                "stream": False,
+                _token_key(models, writer): PORTRAIT_PROMPT_TOKENS,
+                "metadata": {"task": "game_master_portrait"},
+            },
+            user=user,
+            bypass_filter=True,
+            bypass_system_prompt=True,
+        )
+        content, _, _ = _reply_parts(response)
+        prompt = clean_portrait_prompt(content)
+        # A refusal or a stub is no better than the template.
+        return prompt if len(prompt) >= 80 else fallback
+    except Exception:
+        log.exception("Could not write a portrait prompt for %s", npc.get("name"))
+        return fallback
+
+
 async def queue_npc_portrait(
-    request: Any, user: Any, chat_id: str, npc: dict, seed: Optional[int] = None
+    request: Any,
+    user: Any,
+    chat_id: str,
+    npc: dict,
+    seed: Optional[int] = None,
+    model_id: str = "",
+    direction: str = "",
 ) -> bool:
-    """Queue one portrait behind any videos. False if portraits are unavailable."""
+    """Queue one portrait behind any videos. False if portraits are unavailable.
+
+    The prompt is written first, in the background: written inside the queued job it
+    would hold the video queue while a language model thinks.
+    """
     import random
 
     from open_webui.models.game_master import GameMaster
@@ -1457,8 +1515,18 @@ async def queue_npc_portrait(
         return False
     seed = seed if seed is not None else random.randint(0, 2**53 - 1)
     GameMaster.set_portrait(
-        user.id, chat_id, npc_id, name=name, look=look, status="queued", seed=seed, error="", file_id=""
+        user.id,
+        chat_id,
+        npc_id,
+        name=name,
+        look=look,
+        status="queued",
+        seed=seed,
+        error="",
+        file_id="",
+        prompt="",
     )
+    prompt = ""
 
     async def runner() -> dict:
         GameMaster.set_portrait(user.id, chat_id, npc_id, status="running")
@@ -1469,7 +1537,7 @@ async def queue_npc_portrait(
                 config.COMFYUI_VIDEO_API_KEY,
                 config.COMFYUI_VIDEO_TIMEOUT,
             )
-            data, _, content_type = await generate_portrait(client, look, seed)
+            data, _, content_type = await generate_portrait(client, prompt, seed)
             safe = re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-")[:40] or "npc"
             file_item, _ = await asyncio.to_thread(
                 _upload_video,
@@ -1491,18 +1559,34 @@ async def queue_npc_portrait(
             )
             raise
 
-    await enqueue_comfyui_job(user.id, "portrait", f"Portrait: {name}", runner)
+    async def prepare() -> None:
+        nonlocal prompt
+        try:
+            prompt = await write_portrait_prompt(request, user, model_id, npc, direction)
+            GameMaster.set_portrait(user.id, chat_id, npc_id, prompt=prompt)
+            await enqueue_comfyui_job(user.id, "portrait", f"Portrait: {name}", runner)
+        except Exception as e:
+            log.exception("Could not queue a portrait for %s", name)
+            GameMaster.set_portrait(
+                user.id, chat_id, npc_id, status="failed", error=str(e)[:1000] or "Portrait failed"
+            )
+
+    task = asyncio.create_task(prepare())
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
     return True
 
 
-async def queue_missing_portraits(request: Any, user: Any, chat_id: str, state: dict) -> None:
-    """Portraits for NPCs who have just come on stage. Never raises."""
+async def queue_missing_portraits(
+    request: Any, user: Any, chat_id: str, state: dict, model_id: str = ""
+) -> None:
+    """Portraits for NPCs who have just come into the scene. Never raises."""
     from open_webui.models.game_master import GameMaster
 
     try:
         drawn = {p.npc_id: p.name for p in GameMaster.get_portraits(user.id, chat_id)}
         for npc in npcs_needing_portraits(state, drawn):
-            if not await queue_npc_portrait(request, user, chat_id, npc):
+            if not await queue_npc_portrait(request, user, chat_id, npc, model_id=model_id):
                 return
     except Exception:
         log.exception("Could not queue NPC portraits for chat %s", chat_id)

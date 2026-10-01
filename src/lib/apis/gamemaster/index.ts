@@ -21,6 +21,8 @@ export type GameMasterPortrait = {
 	file_id: string;
 	seed: string;
 	error: string;
+	/** The image prompt it was drawn from, written for this subject. */
+	prompt: string;
 	updated_at: number;
 };
 
@@ -143,11 +145,12 @@ export const rerollGameMaster = async (token: string, chatId: string): Promise<G
 export const regenerateNpcPortrait = async (
 	token: string,
 	chatId: string,
-	npcId: string
+	npcId: string,
+	direction = ''
 ): Promise<GameMasterStatus> =>
 	await gmRequest(token, `${chatPath(chatId)}/npcs/${encodeURIComponent(npcId)}/portrait`, {
 		method: 'POST',
-		body: '{}'
+		body: JSON.stringify({ direction })
 	});
 
 export const getSceneNpcs = async (

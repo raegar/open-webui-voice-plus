@@ -44,3 +44,32 @@ def test_image_output_is_read_from_the_save_node():
     entry = {"outputs": {"9": {"images": [{"filename": "owui-gm-portrait_00001_.png", "subfolder": ""}]}}}
     assert find_image_output(entry)["filename"] == "owui-gm-portrait_00001_.png"
     assert find_image_output({"outputs": {}}) is None
+
+
+def test_the_prompt_writer_gets_the_character_and_any_direction():
+    from open_webui.utils.videos.portrait import build_portrait_writer_messages
+
+    messages = build_portrait_writer_messages(
+        "Marek", "the landlord's nephew", "a man in a grey wool overcoat", "more menacing"
+    )
+    system, user = messages[0]["content"], messages[1]["content"]
+    # Reference rules always apply; the treatment follows the subject.
+    assert "whole subject is clearly visible" in system
+    assert "never make it look ordinary or human unless it is" in system
+    assert user.splitlines() == [
+        "Character: Marek",
+        "Who they are: the landlord's nephew",
+        "How they look: a man in a grey wool overcoat",
+        "The player's direction for this portrait, which takes priority over the look "
+        "where they conflict: more menacing",
+    ]
+    assert "direction" not in build_portrait_writer_messages("Marek", "", "tall")[1]["content"]
+
+
+def test_written_prompts_are_cleaned_to_the_prompt_alone():
+    from open_webui.utils.videos.portrait import clean_portrait_prompt
+
+    raw = '<think>plan it</think>\n**Prompt:** "A towering figure of\n  grey static, mid-shudder."'
+    assert clean_portrait_prompt(raw) == "A towering figure of grey static, mid-shudder."
+    assert clean_portrait_prompt("```\nA lone lantern spirit.\n```") == "A lone lantern spirit."
+    assert clean_portrait_prompt("Plain prompt.") == "Plain prompt."

@@ -317,7 +317,7 @@ class GameMasterTable:
                     created_at=now,
                 )
                 db.add(row)
-            for key in ("name", "look", "status", "file_id", "seed", "error"):
+            for key in ("name", "look", "status", "file_id", "seed", "error", "prompt"):
                 if fields.get(key) is not None:
                     setattr(row, key, str(fields[key]))
             row.updated_at = now
@@ -343,6 +343,8 @@ class GMPortrait(Base):
     file_id = Column(String, nullable=False, default="")
     seed = Column(String, nullable=False, default="")
     error = Column(Text, nullable=False, default="")
+    # The image prompt it was drawn from, written for this subject by the chat model.
+    prompt = Column(Text, nullable=False, default="")
     created_at = Column(BigInteger, nullable=False)
     updated_at = Column(BigInteger, nullable=False)
 
@@ -355,6 +357,7 @@ class GMPortraitModel(BaseModel):
     file_id: str
     seed: str
     error: str
+    prompt: str
     updated_at: int
 
 
@@ -367,24 +370,33 @@ def _portrait_model(row: GMPortrait) -> GMPortraitModel:
         file_id=row.file_id or "",
         seed=row.seed or "",
         error=row.error or "",
+        prompt=row.prompt or "",
         updated_at=row.updated_at or 0,
     )
 
 
-def _add_missing_columns() -> None:
-    """Columns added after gm_journal first shipped; create() skips existing tables."""
-    added = {
+# Columns added after a table first shipped; create() skips tables that exist.
+ADDED_COLUMNS = {
+    "gm_journal": {
         "prior_id": "VARCHAR NOT NULL DEFAULT ''",
         "user_message": "TEXT NOT NULL DEFAULT ''",
         "gm_reply": "TEXT NOT NULL DEFAULT ''",
-    }
-    existing = {c["name"] for c in inspect(engine).get_columns("gm_journal")}
+    },
+    "gm_portrait": {
+        "prompt": "TEXT NOT NULL DEFAULT ''",
+    },
+}
+
+
+def _add_missing_columns() -> None:
     with engine.begin() as connection:
-        for name, definition in added.items():
-            if name not in existing:
-                connection.execute(
-                    text(f"ALTER TABLE gm_journal ADD COLUMN {name} {definition}")
-                )
+        for table, added in ADDED_COLUMNS.items():
+            existing = {c["name"] for c in inspect(engine).get_columns(table)}
+            for name, definition in added.items():
+                if name not in existing:
+                    connection.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+                    )
 
 
 GameMaster = GameMasterTable()
