@@ -682,7 +682,7 @@ def promote_introduced(state: dict, note: str) -> dict:
         if not isinstance(npc, dict) or npc.get("status") != "planned":
             continue
         name = _text(npc.get("name")).lower()
-        # "Introduce: The Static Echo", "introduce the stranger now": the name follows
+        # "Introduce: Marek (n1)", "introduce the stranger now": the name follows
         # the word closely, within the same sentence.
         if name and re.search(r"introduc\w*[^.\n]{0,40}?" + re.escape(name), lowered):
             npc["status"] = "entering"
