@@ -89,3 +89,15 @@ export const deleteMemories = async (
 
 export const relinkMemoryCharacters = async (token: string): Promise<MemorySummary> =>
 	await request(token, '/characters/relink', { method: 'POST', body: '{}' });
+
+/** Delete every memory in a date range that matches the other filters. expected is
+ * the count shown when confirming; the server refuses if the matches have changed. */
+export const deleteMemoryRange = async (
+	token: string,
+	filters: Omit<MemoryFilters, 'order' | 'offset' | 'limit'>,
+	expected: number
+): Promise<{ deleted: number; conversations_removed: number; backup: string | null }> =>
+	await request(token, '/delete-range', {
+		method: 'POST',
+		body: JSON.stringify({ ...filters, expected })
+	});

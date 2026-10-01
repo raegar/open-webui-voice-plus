@@ -166,3 +166,40 @@ def test_a_full_relink_replaces_old_links(store):
     assert store.sync_characters(relinked, full=True) == 4
     assert ids(store.search(include=["Nell"])) == ["m2", "m1"]
     assert ids(store.search(include=["Sam"])) == []
+
+
+def test_a_date_range_is_deleted_whole_and_narrowed_by_other_filters(store):
+    store.sync_characters(fake_sources)
+    # 1 September holds m1 (Sam, you) and m2 (Alex, AI); only the AI's goes.
+    result = store.delete_matching(1, since="2026-09-01", until="2026-09-01", role="assistant")
+    assert result["deleted"] == 1
+    assert ids(store.search()) == ["m4", "m3", "m1"]
+    # Everything up to the 2nd, with no other filter.
+    assert store.delete_matching(2, until="2026-09-02")["deleted"] == 2
+    assert ids(store.search()) == ["m4"]
+
+
+def test_a_range_delete_needs_a_date_and_the_confirmed_count(store):
+    with pytest.raises(ValueError, match="date range"):
+        store.delete_matching(4)
+    with pytest.raises(ValueError, match="2 memories match now, not the 1"):
+        store.delete_matching(1, since="2026-09-01", until="2026-09-01")
+    # Nothing was deleted by either refusal.
+    assert store.search()["total"] == 4
+
+
+def test_large_ranges_delete_in_chunks(tmp_path):
+    path = tmp_path / "conversations.db"
+    connection = sqlite3.connect(path)
+    connection.executescript(SCHEMA)
+    connection.execute("INSERT INTO sessions VALUES ('s1', 'x')")
+    connection.execute("INSERT INTO conversations VALUES ('c1', 's1', 'x')")
+    connection.executemany(
+        "INSERT INTO messages VALUES (?, 'c1', '2026-09-01T10:00:00+00:00', 'user', 'x', NULL, NULL)",
+        [(f"m{i}",) for i in range(1300)],
+    )
+    connection.commit()
+    connection.close()
+    big = MemoryStore(str(path))
+    result = big.delete_matching(1300, since="2026-09-01")
+    assert (result["deleted"], result["conversations_removed"]) == (1300, 1)

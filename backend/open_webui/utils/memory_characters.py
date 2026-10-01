@@ -159,9 +159,12 @@ class MemoryCharacterIndex:
             return
         connection = self.connect()
         try:
-            marks = ",".join("?" * len(message_ids))
-            connection.execute(f"DELETE FROM memory_character WHERE message_id IN ({marks})", message_ids)
-            connection.execute(f"DELETE FROM memory_indexed WHERE message_id IN ({marks})", message_ids)
+            # SQLite caps bound parameters per statement, so large deletes go in chunks.
+            for start in range(0, len(message_ids), 500):
+                chunk = message_ids[start : start + 500]
+                marks = ",".join("?" * len(chunk))
+                connection.execute(f"DELETE FROM memory_character WHERE message_id IN ({marks})", chunk)
+                connection.execute(f"DELETE FROM memory_indexed WHERE message_id IN ({marks})", chunk)
             connection.commit()
         finally:
             connection.close()

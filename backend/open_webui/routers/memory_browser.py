@@ -84,3 +84,28 @@ class DeleteForm(BaseModel):
 async def delete_memories(form_data: DeleteForm, user=Depends(get_admin_user)):
     """Permanently delete memories. The first deletion each day backs the store up."""
     return await _run(MemoryStore().delete, form_data.ids)
+
+
+class DeleteRangeForm(BaseModel):
+    """A date range plus the browser's other filters, and the count confirmed."""
+
+    expected: int = Field(ge=0)
+    since: Optional[str] = None
+    until: Optional[str] = None
+    q: str = ""
+    role: Literal["", "user", "assistant"] = ""
+    source: Literal["", "recorded", "imported"] = ""
+    conversation_id: str = ""
+    include: list[str] = Field(default_factory=list)
+    exclude: list[str] = Field(default_factory=list)
+
+
+@router.post("/delete-range")
+async def delete_memory_range(form_data: DeleteRangeForm, user=Depends(get_admin_user)):
+    """Permanently delete every memory in a date range that matches the filters.
+    Refuses if the number matching has changed since it was confirmed."""
+    filters = form_data.model_dump()
+    expected = filters.pop("expected")
+    filters["since"] = filters["since"] or None
+    filters["until"] = filters["until"] or None
+    return await _run(MemoryStore().delete_matching, expected, **filters)

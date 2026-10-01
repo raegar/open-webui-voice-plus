@@ -5,6 +5,7 @@
 	import {
 		deleteMemories,
 		getMemorySummary,
+		deleteMemoryRange,
 		relinkMemoryCharacters,
 		searchMemories,
 		type Memory,
@@ -45,6 +46,28 @@
 	let expanded = new Set<string>();
 	let pendingDelete: string[] = [];
 	let showConfirm = false;
+	let showRangeConfirm = false;
+	// The count the range dialog showed, so the server can refuse if it has changed.
+	let rangeExpected = 0;
+
+	$: hasRange = !!(since || until);
+	$: rangeLabel =
+		since && until
+			? since === until
+				? `on ${since}`
+				: `from ${since} to ${until}`
+			: since
+				? `from ${since} onwards`
+				: `up to ${until}`;
+	// Anything besides the dates narrows a range delete; say so plainly.
+	$: narrowed = !!(
+		q.trim() ||
+		role ||
+		source ||
+		conversationId ||
+		included.length ||
+		excluded.length
+	);
 
 	let searchTimer: ReturnType<typeof setTimeout> | null = null;
 	let requestSerial = 0;
@@ -208,6 +231,43 @@
 		}
 	};
 
+	const askDeleteRange = () => {
+		if (!hasRange || !total) return;
+		rangeExpected = total;
+		showRangeConfirm = true;
+	};
+
+	const doDeleteRange = async () => {
+		deleting = true;
+		try {
+			const result = await deleteMemoryRange(
+				localStorage.token,
+				{
+					q: q.trim(),
+					role,
+					source,
+					since,
+					until,
+					conversation_id: conversationId,
+					include: included,
+					exclude: excluded
+				},
+				rangeExpected
+			);
+			selected = new Set();
+			offset = 0;
+			toast.success(
+				`Deleted ${count(result.deleted)} ${result.deleted === 1 ? 'memory' : 'memories'} ${rangeLabel}` +
+					(result.backup ? `. Backed up the store first (${result.backup}).` : '.')
+			);
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			deleting = false;
+			await Promise.all([load(), refreshSummary()]);
+		}
+	};
+
 	const when = (iso: string) => {
 		const parsed = new Date(iso);
 		return Number.isNaN(parsed.getTime()) ? iso : parsed.toLocaleString();
@@ -229,6 +289,13 @@
 <svelte:head>
 	<title>Memories - {$WEBUI_NAME}</title>
 </svelte:head>
+
+<ConfirmDialog
+	bind:show={showRangeConfirm}
+	title={`Delete ${count(rangeExpected)} ${rangeExpected === 1 ? 'memory' : 'memories'} ${rangeLabel}`}
+	message={`Every memory ${rangeLabel}${narrowed ? ' that matches your other filters' : ''} will be removed for good: ${count(rangeExpected)} in all. The AI will no longer recall any of them. The first deletion each day backs the store up first.`}
+	on:confirm={doDeleteRange}
+/>
 
 <ConfirmDialog
 	bind:show={showConfirm}
@@ -427,6 +494,19 @@
 					>
 						Delete selected{selected.size ? ` (${selected.size})` : ''}
 					</button>
+					{#if hasRange}
+						<button
+							class="rounded-lg bg-red-600 px-3 py-1 text-white hover:bg-red-700 disabled:opacity-40"
+							disabled={!total || loading || deleting}
+							title={narrowed
+								? 'Deletes every memory in the date range that matches your other filters'
+								: 'Deletes every memory in the date range'}
+							on:click={askDeleteRange}
+						>
+							Delete all {count(total)}
+							{rangeLabel}{narrowed ? ' matching these filters' : ''}
+						</button>
+					{/if}
 					<div class="ml-auto flex items-center gap-2 text-gray-500">
 						{#if loading}<Spinner className="size-4" />{/if}
 						{#if total}

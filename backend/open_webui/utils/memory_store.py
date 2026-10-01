@@ -27,6 +27,7 @@ BUSY_TIMEOUT_SECONDS = 15
 BACKUPS_KEPT = 3
 MAX_PAGE = 200
 MAX_BULK_DELETE = 500
+DELETE_CHUNK = 500
 ORDERS = {"newest": "timestamp DESC", "oldest": "timestamp ASC"}
 
 
@@ -217,22 +218,57 @@ class MemoryStore:
             return {"deleted": 0, "conversations_removed": 0, "backup": None}
         if len(ids) > MAX_BULK_DELETE:
             raise ValueError(f"At most {MAX_BULK_DELETE} memories can be deleted at once")
+        return self._delete_ids(ids)
+
+    def delete_matching(self, expected: int, **filters) -> dict:
+        """Delete every memory in a date range, narrowed by any other filters.
+
+        A date is required, so this can never be "delete everything" by accident.
+        expected is the count the person confirmed; if the matches have changed since
+        (the pipeline recorded more, say) nothing is deleted.
+        """
+        if not filters.get("since") and not filters.get("until"):
+            raise ValueError("Choose a date range to delete")
+        where, params = build_filter(**filters)
+        connection = self._connect()
+        try:
+            ids = [
+                row[0]
+                for row in connection.execute(f"SELECT message_id FROM messages{where}", params)
+            ]
+        finally:
+            connection.close()
+        if len(ids) != expected:
+            raise ValueError(
+                f"{len(ids)} memories match now, not the {expected} you confirmed. "
+                "Nothing was deleted; check the list and try again."
+            )
+        if not ids:
+            return {"deleted": 0, "conversations_removed": 0, "backup": None}
+        return self._delete_ids(ids)
+
+    def _delete_ids(self, ids: list[str]) -> dict:
         backup = self.backup_if_due()
         connection = self._connect(attach=False)
         try:
             # Take the write lock now rather than part way through.
             connection.execute("BEGIN IMMEDIATE")
-            marks = ",".join("?" * len(ids))
-            conversations = [
-                row[0]
-                for row in connection.execute(
-                    f"SELECT DISTINCT conversation_id FROM messages WHERE message_id IN ({marks})",
-                    ids,
+            conversations: set[str] = set()
+            deleted = 0
+            # SQLite caps bound parameters per statement, so large ranges go in chunks.
+            for start in range(0, len(ids), DELETE_CHUNK):
+                chunk = ids[start : start + DELETE_CHUNK]
+                marks = ",".join("?" * len(chunk))
+                conversations.update(
+                    row[0]
+                    for row in connection.execute(
+                        f"SELECT DISTINCT conversation_id FROM messages WHERE message_id IN ({marks})",
+                        chunk,
+                    )
                 )
-            ]
-            deleted = connection.execute(
-                f"DELETE FROM messages WHERE message_id IN ({marks})", ids
-            ).rowcount
+                deleted += connection.execute(
+                    f"DELETE FROM messages WHERE message_id IN ({marks})", chunk
+                ).rowcount
             removed = 0
             for conversation_id in conversations:
                 left = connection.execute(
