@@ -46,7 +46,7 @@ export type SceneNpc = {
 export type GameMasterEntry = {
 	id: string;
 	message_id: string;
-	kind: 'setup' | 'turn' | 'consult' | 'reroll' | 'table_talk';
+	kind: 'setup' | 'turn' | 'consult' | 'reroll' | 'table_talk' | 'talk_plan';
 	prior_id: string;
 	user_message: string;
 	gm_reply: string;

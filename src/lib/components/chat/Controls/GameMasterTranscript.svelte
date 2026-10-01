@@ -17,7 +17,8 @@
 		turn: 'After a reply',
 		consult: 'Consulted',
 		reroll: 'Rerolled',
-		table_talk: 'Table talk'
+		table_talk: 'Table talk',
+		talk_plan: 'Plan after table talk'
 	};
 
 	let entries: GameMasterEntry[] = [];

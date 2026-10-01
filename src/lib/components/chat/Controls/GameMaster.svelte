@@ -307,7 +307,11 @@
 				<button
 					class="px-2 py-0.5 rounded-lg bg-gray-100 dark:bg-gray-850 hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-50"
 					title={$i18n.t('Throw away the current direction and plan this moment again')}
-					disabled={rerolling || status?.running || !current || current.kind === 'table_talk'}
+					disabled={rerolling ||
+						status?.running ||
+						!current ||
+						current.kind === 'table_talk' ||
+						current.kind === 'talk_plan'}
 					on:click={reroll}
 				>
 					{$i18n.t('Reroll direction')}

@@ -13,7 +13,7 @@ from open_webui.utils.game_master import (
     get_scene_npcs,
     is_running,
     queue_npc_portrait,
-    run_gm_pass,
+    run_table_talk,
     schedule_gm_pass,
 )
 
@@ -195,20 +195,20 @@ async def talk_to_game_master(
     form_data: TalkForm,
     user=Depends(get_verified_user),
 ):
-    """Table talk: speak to the GM out of character. Waits for its answer."""
+    """Table talk: speak to the GM out of character. Waits for its answer; the plan
+    update it leads to runs afterwards in the background."""
     chat = _chat_or_404(chat_id, user)
     session = GameMaster.get_session(user.id, chat_id)
     if not session or not session.enabled:
         raise HTTPException(status_code=400, detail="The Game Master is off for this chat")
     leaf, messages = _leaf(chat)
-    entry = await run_gm_pass(
+    entry = await run_table_talk(
         request,
         user,
         chat_id,
         leaf,
         _chat_model(chat, leaf, messages),
-        kind="table_talk",
-        talk=form_data.message.strip(),
+        form_data.message.strip(),
     )
     if not entry or not entry.gm_reply:
         raise HTTPException(
@@ -229,7 +229,9 @@ async def reroll_game_master(
     index = GameMaster.get_entry_index(user.id, chat_id)
     current_id = find_state_entry_id(index, messages, leaf, inclusive=True)
     current = GameMaster.get_entry(user.id, current_id) if current_id else None
-    if not current or current.kind == "table_talk":
+    # Table talk and the plan it led to answer something the player said; rerolling
+    # them would throw that away. Ask again at the table instead.
+    if not current or current.kind in ("table_talk", "talk_plan"):
         raise HTTPException(status_code=400, detail="There is no direction to reroll")
     if not schedule_gm_pass(
         request,

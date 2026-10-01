@@ -226,7 +226,6 @@ from open_webui.utils.game_master import (  # noqa: E402
     count_replies_since,
     describe_changes,
     npcs_needing_portraits,
-    parse_gm_talk,
     scene_npcs,
 )
 
@@ -307,18 +306,62 @@ def test_scene_npcs_carry_ready_portraits_only():
     assert scene[0]["look"] == "grey coat"
 
 
-def test_table_talk_answer_is_split_from_the_plan():
-    raw = (
-        "<gm_reply>\nGood idea, but not yet: the betrayal needs room first.\n</gm_reply>\n"
-        "<gm_reasoning>They want a rival.</gm_reasoning>\n"
-        '<gm_plan>{"update": {"player_requests": [{"text": "a rival"}]}, "note": "Marek: watch Alex."}</gm_plan>'
+def test_table_talk_is_a_conversation_ending_on_the_players_words():
+    from open_webui.utils.game_master import build_talk_messages
+
+    messages = build_talk_messages(
+        characters=[{"id": "c1", "name": "Sam", "description": "A courier.", "kind": "character"}],
+        player_character_id="",
+        config={"intensity": "firm"},
+        chat_instructions="",
+        state={"secrets": [{"id": "s1", "text": "Sam has the key"}]},
+        conversation=[{"role": "user", "content": "Hello."}],
+        talk_history=[{"player": "Where is this going?", "gm": "Somewhere dark."}],
+        talk="Can Sam's brother come back?",
     )
-    answer, rest = parse_gm_talk(raw)
-    assert answer == "Good idea, but not yet: the betrayal needs room first."
-    reasoning, plan = parse_gm_reply(rest)
-    assert reasoning == "They want a rival."
-    assert "Good idea" not in reasoning
-    assert apply_plan(None, plan)["player_requests"] == [{"text": "a rival", "id": "r1"}]
+    assert messages[0]["role"] == "system"
+    assert "out of character" in messages[0]["content"]
+    assert "never reveal secrets" in messages[0]["content"]
+    assert "Sam has the key" in messages[0]["content"]
+    assert messages[1:] == [
+        {"role": "user", "content": "Where is this going?"},
+        {"role": "assistant", "content": "Somewhere dark."},
+        {"role": "user", "content": "Can Sam's brother come back?"},
+    ]
+
+
+def test_talk_answers_lose_stray_markup():
+    from open_webui.utils.game_master import clean_talk_reply
+
+    raw = "<think>hm</think><gm_reply>Not yet: the betrayal needs room.</gm_reply><gm_plan>{}</gm_plan>"
+    assert clean_talk_reply(raw) == "Not yet: the betrayal needs room."
+    assert clean_talk_reply("Plain answer.") == "Plain answer."
+
+
+def test_pass_kind_survives_attached_characters():
+    # Regression: the character loop once reused the name `kind`, so with characters
+    # attached every consult, reroll and table-talk pass ran as a plain turn review.
+    base = dict(
+        characters=[
+            {"id": "c1", "name": "Sam", "description": "A courier.", "kind": "character"},
+            {"id": "l1", "name": "Harbour", "description": "Cold.", "kind": "location"},
+        ],
+        player_character_id="",
+        config={},
+        chat_instructions="",
+        state={"premise": "x"},
+        last_note="",
+        conversation=[],
+    )
+    consult = build_gm_messages(**base, kind="consult")[1]["content"]
+    assert "take another look" in consult
+    talk_plan = build_gm_messages(
+        **base, kind="talk_plan", talk="Bring back the brother.", talk_reply="Soon."
+    )[1]["content"]
+    assert "Bring back the brother." in talk_plan
+    assert "## You answered them\nSoon." in talk_plan
+    reroll = build_gm_messages(**base, kind="reroll", rejected_note="Sam: hold firm.")[1]["content"]
+    assert "rerolled" in reroll
 
 
 def test_prompt_task_follows_the_kind_of_pass():
@@ -330,26 +373,15 @@ def test_prompt_task_follows_the_kind_of_pass():
         last_note="Sam: hold firm.",
         conversation=[],
     )
-    talk = build_gm_messages(
-        **base,
-        state={"premise": "x"},
-        kind="table_talk",
-        talk="Can Sam's brother come back?",
-        talk_history=[{"player": "Where is this going?", "gm": "Somewhere dark."}],
-    )
-    assert "<gm_reply>" in talk[0]["content"]
-    assert "Can Sam's brother come back?" in talk[1]["content"]
-    assert "[You]\nSomewhere dark." in talk[1]["content"]
-
     reroll = build_gm_messages(**base, state={"premise": "x"}, kind="reroll", rejected_note="Sam: hold firm.")
     assert "rerolled" in reroll[1]["content"]
-    assert "<gm_reply>" not in reroll[0]["content"]
 
     consult = build_gm_messages(**base, state={"premise": "x"}, kind="consult")
     assert "take another look" in consult[1]["content"]
 
-    first_talk = build_gm_messages(**base, state=None, kind="table_talk", talk="hello")
-    assert "session zero" in first_talk[1]["content"]
+    first_talk_plan = build_gm_messages(**base, state=None, kind="talk_plan", talk="hi", talk_reply="hello")
+    assert "session zero" in first_talk_plan[1]["content"]
+    assert "you answered them" in first_talk_plan[1]["content"]
 
 
 def test_a_planless_reply_gets_one_repair_turn():
@@ -372,6 +404,5 @@ def test_every_pass_ends_by_restating_the_reply_shape():
     )
     turn = build_gm_messages(**common)[1]["content"]
     assert turn.rstrip().endswith("without it nothing you decide reaches the story.")
-    assert "<gm_reply>" not in turn
-    talk = build_gm_messages(**common, kind="table_talk", talk="hi")[1]["content"]
-    assert "<gm_reply>...</gm_reply>, then <gm_reasoning>" in talk
+    talk_plan = build_gm_messages(**common, kind="talk_plan", talk="hi", talk_reply="hello")
+    assert talk_plan[1]["content"].rstrip().endswith("reaches the story.")

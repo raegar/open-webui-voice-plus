@@ -47,6 +47,12 @@ RUN sed -i 's/^    videos,$/    videos,\n    privacy,/' /app/backend/open_webui/
     && sed -i "s|app.include_router(videos.router, prefix='/api/v1/videos', tags=\['videos'\])|app.include_router(videos.router, prefix='/api/v1/videos', tags=['videos'])\napp.include_router(privacy.router, prefix='/api/v1/privacy', tags=['privacy'])|" /app/backend/open_webui/main.py \
     && grep -q '^    privacy,$' /app/backend/open_webui/main.py \
     && grep -q 'include_router(privacy.router' /app/backend/open_webui/main.py
+# Pipeline filters (the persistent memory pipeline) follow the chat's filter toggles;
+# upstream runs them on every chat. The script asserts upstream's layout.
+COPY --from=builder /build/scripts/patch_pipeline_filter_toggle.py /tmp/patch_pipeline_filter_toggle.py
+RUN python3 /tmp/patch_pipeline_filter_toggle.py /app/backend/open_webui/routers/pipelines.py \
+    && grep -q '_is_toggleable_pipeline' /app/backend/open_webui/routers/pipelines.py \
+    && rm /tmp/patch_pipeline_filter_toggle.py
 # Game Master: the fork's own tables, pass logic and router, registered after privacy.
 COPY --from=builder /build/backend/open_webui/models/game_master.py /app/backend/open_webui/models/game_master.py
 COPY --from=builder /build/backend/open_webui/utils/game_master.py /app/backend/open_webui/utils/game_master.py

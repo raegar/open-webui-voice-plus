@@ -158,9 +158,11 @@
 	}
 
 	let selectedToolIds = [];
-	const MEMORY_FILTER_ID = 'persistent_memory_filter';
-	const defaultMemoryFilterIds = () =>
-		localStorage.getItem('memoryRecordingEnabled') !== 'false' ? [MEMORY_FILTER_ID] : [];
+	// Memory recording is opt-in: every chat starts with it off, and switching it on in
+	// Integrations applies to that chat only. Nothing is remembered between chats.
+	const defaultMemoryFilterIds = (): string[] => [];
+	// The old remembered choice would otherwise linger in this browser for good.
+	localStorage.removeItem('memoryRecordingEnabled');
 
 	let selectedFilterIds = defaultMemoryFilterIds();
 
@@ -1040,11 +1042,6 @@
 	};
 
 	$: onHistoryChange(history);
-
-	$: localStorage.setItem(
-		'memoryRecordingEnabled',
-		selectedFilterIds.includes(MEMORY_FILTER_ID) ? 'true' : 'false'
-	);
 
 	const getContents = () => {
 		const messages = history ? createMessagesList(history, history.currentId) : [];

@@ -30,6 +30,8 @@ SETUP_MESSAGES = 30
 MAX_MESSAGE_CHARS = 3000
 MAX_PROFILE_CHARS = 1500
 MAX_TOKENS = 8000
+# A table-talk answer is a few sentences.
+TALK_MAX_TOKENS = 2000
 
 # Bounds on the GM's state, so a runaway model cannot grow it without limit.
 LIMITS = {"npcs": 20, "threads": 10, "clocks": 8, "secrets": 15, "player_requests": 12}
@@ -150,16 +152,20 @@ REROLL_TASK = (
     "somewhere meaningfully different, still true to the characters.\n"
     "The direction they rejected:\n{rejected}"
 )
-TALK_TASK = (
-    "The player is talking to you out of character. Answer them, then update your "
-    "plan and rewrite the note for the next reply wherever their words change it."
+TALK_PLAN_TASK = (
+    "The player has just talked to you out of character, and you answered them "
+    "(above). Update your plan to match what you told them: a suggestion you took or "
+    "adapted goes into player_requests with your plan for it, a binding instruction "
+    "goes into player_directives, and a correction fixes your plan. Then rewrite the "
+    "note for the next reply so the change shows at once where it should. Do not "
+    "review the latest reply for caves again."
 )
 # Restated last, where the model reads it most recently: some models write their
 # reasoning as prose and stop without the plan.
 SHAPE_REMINDER = (
-    "Reply in the required shape: {talk}<gm_reasoning>...</gm_reasoning>, then "
-    "<gm_plan> with the JSON object. The plan is required: without it nothing you "
-    "decide reaches the story."
+    "Reply in the required shape: <gm_reasoning>...</gm_reasoning>, then <gm_plan> "
+    "with the JSON object. The plan is required: without it nothing you decide "
+    "reaches the story."
 )
 # Sent once when a reply has no readable plan, continuing from the GM's own reasoning.
 REPAIR_PROMPT = (
@@ -169,23 +175,19 @@ REPAIR_PROMPT = (
     "No other text."
 )
 
-TALK_ADDENDUM = """
+TALK_SYSTEM = """You are the Game Master of an ongoing interactive story, in the tradition of a tabletop DM. Another model, the actor, plays the characters and writes the story. You work behind the scenes: you keep the plans and brief the characters.
 
-## Table talk
-Right now the player is talking to you out of character, across the table, as they would to a DM. This is the one place you speak to them directly.
-
-Begin your reply with this block, before your reasoning and plan:
-<gm_reply>
-Your answer to the player, in your own voice as their game master: direct, friendly and opinionated. Plain prose, usually a few sentences.
-</gm_reply>
+Right now the player is talking to you out of character, across the table, as they would to a DM. Answer them directly in your own voice: friendly, frank and opinionated. Plain prose, usually a few sentences. No headings, no lists unless they help, no JSON, no tags. Never write story prose and never speak as a character.
 
 At the table:
 - Answer questions about direction honestly, but keep your secrets and planned twists unless the player explicitly asks to be spoiled.
 - A suggestion is a request, not an order. Take it, adapt it to what you already have planned, or push back, say why, and offer something better. You are a DM with opinions, not an assistant who agrees to everything.
-- A suggestion you take or adapt goes into player_requests with your plan for it, to be worked in over the coming scenes rather than crammed into the next reply.
-- A clear instruction about the game ("stop doing that", "no violence in this chat", "tone it down") is binding: record it in player_directives and follow it.
-- A correction to your facts ("Sam doesn't know about the letter yet") is binding: fix your plan.
-- Then rewrite the note for the next reply so the change shows at once where it should."""
+- A clear instruction about the game ("stop doing that", "tone it down") or a correction to your facts is binding: say plainly that you will follow it.
+- Say what will change, if anything, without spoiling how.
+
+Your intensity setting: {intensity}
+
+What you know:"""
 
 NOTES_HEADER = (
     "Private direction from the game master for your next reply. Play it through the "
@@ -428,21 +430,6 @@ def _loads_lenient(text: str) -> Optional[dict]:
     return None
 
 
-def parse_gm_talk(raw: str) -> tuple[str, str]:
-    """Split off the table-talk answer. Returns (answer to the player, the rest)."""
-    raw = raw or ""
-    match = re.search(
-        r"<gm_reply>\s*(.*?)\s*(?:</gm_reply>|(?=<gm_reasoning>)|(?=<gm_plan>)|$)",
-        raw,
-        flags=re.S | re.I,
-    )
-    if not match:
-        return "", raw
-    rest = raw[: match.start()] + raw[match.end() :]
-    rest = re.sub(r"</gm_reply>", "", rest, flags=re.I)
-    return match.group(1).strip(), rest
-
-
 def parse_gm_reply(raw: str) -> tuple[str, Optional[dict]]:
     """Split a GM reply into (reasoning, plan). plan is None when unparseable."""
     raw = raw or ""
@@ -675,41 +662,22 @@ def _outfit_text(character: Any) -> str:
     return f"{name}: {description}" if description else name
 
 
-def build_gm_messages(
-    *,
-    characters: list,
-    player_character_id: str,
-    config: dict,
-    chat_instructions: str,
-    state: Optional[dict],
-    last_note: str,
-    conversation: list[dict],
-    kind: str = "turn",
-    talk: str = "",
-    talk_history: Optional[list[dict]] = None,
-    rejected_note: str = "",
-) -> list[dict]:
-    """The GM's system and user messages for one pass.
-
-    talk_history holds earlier table-talk exchanges as {"player", "gm"} pairs.
-    """
-    intensity = INTENSITY.get(config.get("intensity"), INTENSITY["firm"])
-    system = SYSTEM_PROMPT.format(intensity=intensity)
-    if kind == "table_talk":
-        system += TALK_ADDENDUM
-
+def _context_sections(
+    characters: list, player_character_id: str, config: dict, chat_instructions: str
+) -> tuple[list[str], str]:
+    """Characters, setting, agenda and instructions, plus the player's character name."""
     roster, settings = [], []
     player_name = ""
     for character in characters:
-        kind = _profile(character, "kind") or "character"
+        character_kind = _profile(character, "kind") or "character"
         name = _profile(character, "name")
         if not name:
             continue
         description = _profile(character, "description")[:MAX_PROFILE_CHARS]
-        if kind == "location":
+        if character_kind == "location":
             settings.append(f"- {name}: {description}")
             continue
-        if kind != "character":
+        if character_kind != "character":
             continue
         is_player = bool(player_character_id) and _profile(character, "id") == player_character_id
         if is_player:
@@ -723,15 +691,6 @@ def build_gm_messages(
         if state_of_dress:
             lines.append(f"  currently: {state_of_dress[:500]}")
         roster.append("\n".join(lines))
-
-    player_label = f"Player ({player_name})" if player_name else "Player"
-    transcript = []
-    for message in conversation:
-        text = message_text(message)[:MAX_MESSAGE_CHARS]
-        if not text:
-            continue
-        who = player_label if message.get("role") == "user" else "Story"
-        transcript.append(f"[{who}]\n{text}")
 
     sections = [
         "## Characters\n" + ("\n".join(roster) if roster else "(no character profiles attached)"),
@@ -751,28 +710,63 @@ def build_gm_messages(
         )
     if _text(chat_instructions):
         sections.append("## Chat instructions (binding)\n" + chat_instructions.strip()[:4000])
+    return sections, player_name
+
+
+def _conversation_section(conversation: list[dict], player_name: str) -> str:
+    player_label = f"Player ({player_name})" if player_name else "Player"
+    transcript = []
+    for message in conversation:
+        text = message_text(message)[:MAX_MESSAGE_CHARS]
+        if not text:
+            continue
+        who = player_label if message.get("role") == "user" else "Story"
+        transcript.append(f"[{who}]\n{text}")
+    return "## Conversation so far (most recent last)\n" + (
+        "\n\n".join(transcript) if transcript else "(nothing yet: the story has not started)"
+    )
+
+
+def build_gm_messages(
+    *,
+    characters: list,
+    player_character_id: str,
+    config: dict,
+    chat_instructions: str,
+    state: Optional[dict],
+    last_note: str,
+    conversation: list[dict],
+    kind: str = "turn",
+    talk: str = "",
+    talk_reply: str = "",
+    rejected_note: str = "",
+) -> list[dict]:
+    """The GM's system and user messages for one planning pass.
+
+    kind is turn, setup, consult, reroll or talk_plan. A talk_plan pass follows a
+    table-talk exchange: talk is what the player said and talk_reply the GM's answer.
+    """
+    intensity = INTENSITY.get(config.get("intensity"), INTENSITY["firm"])
+    system = SYSTEM_PROMPT.format(intensity=intensity)
+
+    sections, player_name = _context_sections(
+        characters, player_character_id, config, chat_instructions
+    )
     if state:
         sections.append("## Your current plan\n" + json.dumps(state, ensure_ascii=False, indent=1))
         if _text(last_note):
             sections.append("## The note you issued last time\n" + last_note.strip())
-    sections.append(
-        "## Conversation so far (most recent last)\n"
-        + ("\n\n".join(transcript) if transcript else "(nothing yet: the story has not started)")
-    )
-    if talk_history:
-        exchanges = [
-            f"[Player, out of character]\n{_text(item.get('player'))[:MAX_MESSAGE_CHARS]}\n"
-            f"[You]\n{_text(item.get('gm'))[:MAX_MESSAGE_CHARS]}"
-            for item in talk_history
-        ]
-        sections.append("## Table talk so far (most recent last)\n" + "\n\n".join(exchanges))
+    sections.append(_conversation_section(conversation, player_name))
 
     tasks = []
-    if kind == "table_talk":
+    if kind == "talk_plan":
         sections.append(
-            "## The player says to you, out of character\n" + _text(talk)[:MAX_MESSAGE_CHARS]
+            "## The player just said to you, out of character\n"
+            + _text(talk)[:MAX_MESSAGE_CHARS]
+            + "\n\n## You answered them\n"
+            + _text(talk_reply)[:MAX_MESSAGE_CHARS]
         )
-        tasks.append(TALK_TASK)
+        tasks.append(TALK_PLAN_TASK)
         if not state:
             tasks.append(SETUP_TASK)
     elif not state:
@@ -783,15 +777,63 @@ def build_gm_messages(
         tasks.append(TURN_TASK)
     if kind == "reroll" and _text(rejected_note):
         tasks.append(REROLL_TASK.format(rejected=rejected_note.strip()))
-    tasks.append(
-        SHAPE_REMINDER.format(talk="<gm_reply>...</gm_reply>, then " if kind == "table_talk" else "")
-    )
+    tasks.append(SHAPE_REMINDER)
     sections.append("## Your task\n" + "\n\n".join(tasks))
 
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": "\n\n".join(sections)},
     ]
+
+
+def build_talk_messages(
+    *,
+    characters: list,
+    player_character_id: str,
+    config: dict,
+    chat_instructions: str,
+    state: Optional[dict],
+    conversation: list[dict],
+    talk_history: list[dict],
+    talk: str,
+) -> list[dict]:
+    """A plain conversation with the GM, ending on the player's words.
+
+    Kept apart from planning on purpose: buried in a planning prompt, the player's
+    question was ignored and the model ran an ordinary turn review instead. Here it
+    is the last thing the model reads, and answering it is the only job.
+    """
+    intensity = INTENSITY.get(config.get("intensity"), INTENSITY["firm"])
+    sections, player_name = _context_sections(
+        characters, player_character_id, config, chat_instructions
+    )
+    sections.append(
+        "## Your current plan (private: never reveal secrets or planned twists unless "
+        "the player explicitly asks to be spoiled)\n"
+        + (json.dumps(state, ensure_ascii=False, indent=1) if state else "(no plan yet)")
+    )
+    sections.append(_conversation_section(conversation, player_name))
+    messages = [
+        {
+            "role": "system",
+            "content": TALK_SYSTEM.format(intensity=intensity) + "\n\n" + "\n\n".join(sections),
+        }
+    ]
+    for item in talk_history or []:
+        player, gm = _text(item.get("player")), _text(item.get("gm"))
+        if player and gm:
+            messages.append({"role": "user", "content": player[:MAX_MESSAGE_CHARS]})
+            messages.append({"role": "assistant", "content": gm[:MAX_MESSAGE_CHARS]})
+    messages.append({"role": "user", "content": _text(talk)[:MAX_MESSAGE_CHARS]})
+    return messages
+
+
+def clean_talk_reply(raw: str) -> str:
+    """The GM's answer with any thinking or stray planning markup removed."""
+    text = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.S | re.I)
+    text = re.sub(r"<(gm_plan|gm_reasoning)>.*?(</\1>|$)", "", text, flags=re.S | re.I)
+    text = re.sub(r"</?gm_reply>", "", text, flags=re.I)
+    return text.strip()
 
 
 def build_repair_messages(gm_messages: list[dict], reply: str) -> list[dict]:
@@ -925,16 +967,20 @@ async def run_gm_pass(
     kind: str = "turn",
     event_emitter: Optional[Callable] = None,
     talk: str = "",
+    talk_reply: str = "",
     prior_override: Any = _UNSET,
     rejected_note: str = "",
+    counted: bool = False,
 ) -> Optional[Any]:
-    """One GM pass at message_id. Never raises; failures are journalled.
+    """One GM planning pass at message_id. Never raises; failures are journalled.
 
     Where it starts from: a turn pass reacts to a new reply, so it builds on the
     nearest pass *above* that reply (a regenerated reply starts where its sibling
-    did). Consult and table talk build on the plan as it stands at message_id. A
+    did). Consult and talk_plan build on the plan as it stands at message_id. A
     reroll passes its prior explicitly, to start again from where the rerolled pass
     did. Returns the new journal entry, or None if nothing ran.
+
+    counted means schedule_gm_pass already marked the chat as running.
     """
     from open_webui.models.chats import Chats
     from open_webui.models.game_master import GameMaster
@@ -950,7 +996,8 @@ async def run_gm_pass(
             except Exception:
                 log.debug("Could not emit GM event", exc_info=True)
 
-    _running[chat_id] = _running.get(chat_id, 0) + 1
+    if not counted:
+        _running[chat_id] = _running.get(chat_id, 0) + 1
     try:
         # Passes for one chat run in order, so each builds on the last one's state.
         async with _lock(chat_id):
@@ -993,12 +1040,6 @@ async def run_gm_pass(
                 if gm_model not in models:
                     raise ValueError(f"Model not found: {gm_model}")
 
-                talk_history = []
-                if kind == "table_talk":
-                    talk_history = [
-                        {"player": item.user_message, "gm": item.gm_reply}
-                        for item in GameMaster.get_table_talk(user.id, chat_id, TALK_HISTORY)
-                    ]
                 gm_messages = build_gm_messages(
                     characters=VideoCharacters.get_for_chat(user.id, chat_id),
                     player_character_id=session.config.get("player_character_id", ""),
@@ -1009,14 +1050,10 @@ async def run_gm_pass(
                     conversation=chain[-(SETUP_MESSAGES if state is None else TURN_MESSAGES):],
                     kind=kind,
                     talk=talk,
-                    talk_history=talk_history,
+                    talk_reply=talk_reply,
                     rejected_note=rejected_note,
                 )
-                token_key = (
-                    "max_tokens"
-                    if models[gm_model].get("owned_by") == "ollama"
-                    else "max_completion_tokens"
-                )
+                token_key = _token_key(models, gm_model)
                 response = await generate_chat_completion(
                     request,
                     form_data={
@@ -1033,10 +1070,6 @@ async def run_gm_pass(
                     bypass_system_prompt=True,
                 )
                 content, model_reasoning, tokens = _reply_parts(response)
-                raw = content
-                gm_reply = ""
-                if kind == "table_talk":
-                    gm_reply, content = parse_gm_talk(content)
                 reasoning, plan = parse_gm_reply(content)
                 if plan is None:
                     # One repair turn: ask for just the plan, after its own reasoning.
@@ -1044,7 +1077,7 @@ async def run_gm_pass(
                         request,
                         form_data={
                             "model": gm_model,
-                            "messages": build_repair_messages(gm_messages, raw),
+                            "messages": build_repair_messages(gm_messages, content),
                             "stream": False,
                             token_key: MAX_TOKENS,
                             "metadata": {"task": "game_master", "chat_id": chat_id},
@@ -1065,8 +1098,6 @@ async def run_gm_pass(
                     "message_id": message_id or "",
                     "kind": kind,
                     "prior_id": prior.id if prior else "",
-                    "user_message": talk if kind == "table_talk" else "",
-                    "gm_reply": _clip(gm_reply, 8000),
                     "model_reasoning": model_reasoning,
                     "model": gm_model,
                     "tokens": tokens,
@@ -1074,18 +1105,6 @@ async def run_gm_pass(
                 }
 
                 if plan is None:
-                    if gm_reply:
-                        # The answer stands even without a plan; the plan carries over.
-                        entry = GameMaster.add_entry(
-                            user.id,
-                            chat_id,
-                            **common,
-                            reasoning=reasoning,
-                            state=copy.deepcopy(state) if state is not None else None,
-                            note=prior.note if prior else "",
-                        )
-                        await emit({"status": "done"})
-                        return entry
                     GameMaster.add_entry(
                         user.id,
                         chat_id,
@@ -1132,7 +1151,6 @@ async def run_gm_pass(
                     message_id=message_id or "",
                     kind=kind,
                     prior_id=prior.id if prior else "",
-                    user_message=talk if kind == "table_talk" else "",
                     model=gm_model,
                     duration_ms=int((time.monotonic() - started) * 1000),
                     error=str(e)[:2000] or e.__class__.__name__,
@@ -1146,6 +1164,150 @@ async def run_gm_pass(
         _running[chat_id] = max(0, _running.get(chat_id, 1) - 1)
 
 
+def _token_key(models: dict, model_id: str) -> str:
+    return "max_tokens" if models[model_id].get("owned_by") == "ollama" else "max_completion_tokens"
+
+
+async def run_table_talk(
+    request: Any,
+    user: Any,
+    chat_id: str,
+    message_id: Optional[str],
+    model_id: str,
+    talk: str,
+) -> Optional[Any]:
+    """Answer the player out of character, then update the plan in the background.
+
+    Two steps on purpose. The answer is a plain conversation ending on the player's
+    words, so it comes back in seconds and cannot be mistaken for a planning job. The
+    plan update that follows is an ordinary pass (talk_plan) told what was said.
+    Returns the table_talk entry, or None if the GM gave no answer.
+    """
+    from open_webui.models.chats import Chats
+    from open_webui.models.game_master import GameMaster
+    from open_webui.models.video_characters import VideoCharacters
+    from open_webui.utils.chat import generate_chat_completion
+    from open_webui.utils.chat_instructions import get_stored_chat_instructions
+    from open_webui.utils.misc import get_message_list
+
+    entry = None
+    _running[chat_id] = _running.get(chat_id, 0) + 1
+    try:
+        async with _lock(chat_id):
+            session = GameMaster.get_session(user.id, chat_id)
+            if not session or not session.enabled:
+                return None
+            started = time.monotonic()
+            gm_model = ""
+            prior = None
+            try:
+                chat = Chats.get_chat_by_id_and_user_id(chat_id, user.id)
+                if not chat:
+                    return None
+                messages_map = Chats.get_messages_map_by_chat_id(chat_id) or {}
+                chain = get_message_list(messages_map, message_id) if message_id else []
+                index = GameMaster.get_entry_index(user.id, chat_id)
+                prior_id = find_state_entry_id(index, messages_map, message_id, inclusive=True)
+                prior = GameMaster.get_entry(user.id, prior_id) if prior_id else None
+                state = prior.state if prior else None
+
+                models = request.app.state.MODELS
+                gm_model = resolve_gm_model(models, model_id)
+                if gm_model not in models:
+                    raise ValueError(f"Model not found: {gm_model}")
+                talk_messages = build_talk_messages(
+                    characters=VideoCharacters.get_for_chat(user.id, chat_id),
+                    player_character_id=session.config.get("player_character_id", ""),
+                    config=session.config,
+                    chat_instructions=get_stored_chat_instructions(chat) or "",
+                    state=state,
+                    conversation=chain[-TURN_MESSAGES:],
+                    talk_history=[
+                        {"player": item.user_message, "gm": item.gm_reply}
+                        for item in GameMaster.get_table_talk(user.id, chat_id, TALK_HISTORY)
+                    ],
+                    talk=talk,
+                )
+                response = await generate_chat_completion(
+                    request,
+                    form_data={
+                        "model": gm_model,
+                        "messages": talk_messages,
+                        "stream": False,
+                        _token_key(models, gm_model): TALK_MAX_TOKENS,
+                        "metadata": {"task": "game_master", "chat_id": chat_id},
+                    },
+                    user=user,
+                    bypass_filter=True,
+                    bypass_system_prompt=True,
+                )
+                content, model_reasoning, tokens = _reply_parts(response)
+                reply = _clip(clean_talk_reply(content), 8000)
+                fields = {
+                    "message_id": message_id or "",
+                    "kind": "table_talk",
+                    "prior_id": prior.id if prior else "",
+                    "user_message": talk,
+                    "model_reasoning": model_reasoning,
+                    "model": gm_model,
+                    "tokens": tokens,
+                    "duration_ms": int((time.monotonic() - started) * 1000),
+                }
+                if not reply:
+                    GameMaster.add_entry(
+                        user.id, chat_id, **fields, error="The GM gave an empty answer."
+                    )
+                    return None
+                # The answer changes nothing by itself: it carries the plan and the
+                # direction over, so it is a safe point for later passes to build on.
+                entry = GameMaster.add_entry(
+                    user.id,
+                    chat_id,
+                    **fields,
+                    gm_reply=reply,
+                    state=copy.deepcopy(state) if state is not None else None,
+                    note=prior.note if prior else "",
+                )
+                log.info(
+                    "GM table talk for chat %s: %d tokens in %.1fs",
+                    chat_id,
+                    tokens,
+                    fields["duration_ms"] / 1000,
+                )
+            except Exception as e:
+                log.exception("GM table talk failed for chat %s", chat_id)
+                GameMaster.add_entry(
+                    user.id,
+                    chat_id,
+                    message_id=message_id or "",
+                    kind="table_talk",
+                    prior_id=prior.id if prior else "",
+                    user_message=talk,
+                    model=gm_model,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    error=str(e)[:2000] or e.__class__.__name__,
+                )
+                return None
+    except Exception:
+        log.exception("GM table talk could not be journalled for chat %s", chat_id)
+        return None
+    finally:
+        _running[chat_id] = max(0, _running.get(chat_id, 1) - 1)
+
+    # Outside the lock: the plan update queues behind it rather than holding the answer.
+    schedule_gm_pass(
+        request,
+        user,
+        chat_id,
+        message_id,
+        model_id,
+        kind="talk_plan",
+        talk=talk,
+        talk_reply=entry.gm_reply,
+    )
+    return entry
+
+
 def schedule_gm_pass(
     request: Any,
     user: Any,
@@ -1156,7 +1318,11 @@ def schedule_gm_pass(
     event_emitter: Optional[Callable] = None,
     **options: Any,
 ) -> bool:
-    """Start a pass in the background if the GM is on for this chat."""
+    """Start a pass in the background if the GM is on for this chat.
+
+    The chat counts as running from here, not from when the task first gets the event
+    loop, so a status read straight after scheduling already shows the GM planning.
+    """
     from open_webui.models.game_master import GameMaster
 
     if not chat_id or chat_id.startswith("local:") or not model_id:
@@ -1164,8 +1330,11 @@ def schedule_gm_pass(
     session = GameMaster.get_session(user.id, chat_id)
     if not session or not session.enabled:
         return False
+    _running[chat_id] = _running.get(chat_id, 0) + 1
     task = asyncio.create_task(
-        run_gm_pass(request, user, chat_id, message_id, model_id, kind, event_emitter, **options)
+        run_gm_pass(
+            request, user, chat_id, message_id, model_id, kind, event_emitter, counted=True, **options
+        )
     )
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
