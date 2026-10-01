@@ -43,7 +43,9 @@ MAX_STRING = 1500
 PREFIXES = {"npcs": "n", "threads": "t", "clocks": "c", "secrets": "s", "player_requests": "r"}
 LIST_KEYS = tuple(PREFIXES)
 TALK_HISTORY = 8
-NPC_STATUSES = ("planned", "on_stage", "off_stage", "gone")
+NPC_STATUSES = ("planned", "entering", "on_stage", "off_stage", "gone")
+# Shown in the scene: entering NPCs arrive in the very next reply.
+PRESENT_STATUSES = ("entering", "on_stage")
 
 INTENSITY = {
     "light": (
@@ -76,7 +78,7 @@ Principles:
 6. Out-of-character asides from the player, such as "(OOC: ...)", "((...))" or "OOC:", are real direction from the person. Honour them. Record binding ones in player_directives.
 7. The character marked PLAYER belongs to the player. Never decide what they say, think, feel or choose, and never brief them. You do decide how the world responds to what they attempt: whether a lie lands, whether a door opens, whether a risky move succeeds or costs them.
 8. Run the world. Complications grow from what is already set up (threads, clocks, NPCs with their own business), not from coincidence. Advance a clock when the story pushes it. When a clock fills, its consequence happens.
-9. Introduce NPCs as a DM would: when they serve a thread, a clock or the player's agenda, and one new face at a time. Give each a one-line card, a want, a voice, and a fixed visual look (age, build, face, hair, clothing) that stays the same from scene to scene.
+9. Introduce NPCs as a DM would: when they serve a thread, a clock or the player's agenda, and one new face at a time. Give each a one-line card, a want, a voice, and a fixed visual look (age, build, face, hair, clothing) that stays the same from scene to scene. To bring an NPC in, set their status to "entering": the actor is then required to bring them into the very next reply, and they move on stage automatically once that reply is written. Keep NPCs you are saving for later as "planned". Once the player has asked for someone and you have agreed, do not keep postponing: set them entering.
 10. Secrets. A character's own secrets can go in their briefing, because an actor must know them to play them. A twist no character knows stays with you until the story earns the reveal, though you can hint at it.
 11. Respect the player's agenda, their directives and the chat instructions. Make the story harder, never into something the player said they do not want.
 12. Pace yourself. Not every turn needs a new event. Some turns the right note is simply: hold your ground.
@@ -105,7 +107,7 @@ The JSON:
         "stance": {{ "<issue>": {{ "position": "...", "price": "what would change it" }} }}
       }}
     }},
-    "npcs": [{{ "id": "n1", "name": "...", "status": "planned | on_stage | off_stage | gone", "card": "who they are, one line", "want": "...", "voice": "...", "look": "fixed visual description", "knows": ["s1"] }}],
+    "npcs": [{{ "id": "n1", "name": "...", "status": "planned | entering | on_stage | off_stage | gone", "card": "who they are, one line", "want": "...", "voice": "...", "look": "fixed visual description", "knows": ["s1"] }}],
     "threads": [{{ "id": "t1", "title": "...", "status": "seeded | rising | climax | resolved", "next_beat": "...", "gm_only": false }}],
     "clocks": [{{ "id": "c1", "label": "...", "filled": 0, "size": 6, "on_full": "what happens when it fills" }}],
     "secrets": [{{ "id": "s1", "text": "...", "known_by": ["names"], "reveal": "when or how" }}],
@@ -122,9 +124,9 @@ The JSON:
 Writing the note:
 - Address each character who matters to the next reply by name, in the second person: what you want right now, what you will do if the player pulls you another way, and what it would take to change your mind.
 - You will not see the player's next message before the actor replies, so cover their likely moves. Write standing intentions and rulings, not lines of dialogue.
-- Add world direction when there is any: an event to set in motion, an NPC to bring in ("Introduce: <name>, ..."), how a risky attempt will go.
+- Add world direction when there is any: an event to set in motion, how a risky attempt will go. To bring in an NPC, set their status to "entering" rather than describing it here.
 - Never brief the PLAYER character. Never include a secret that only you know.
-- Cards for NPCs who are on stage are appended automatically, so do not repeat them.
+- Cards for NPCs who are entering or on stage are added automatically, so do not repeat them.
 - Under 200 words, plain text."""
 
 SETUP_TASK = (
@@ -455,6 +457,10 @@ def _by_id(items: Any) -> dict:
     return {item["id"]: item for item in items if isinstance(item, dict) and item.get("id")}
 
 
+def _status_label(status: Any) -> str:
+    return "arriving" if status == "entering" else str(status).replace("_", " ")
+
+
 def describe_changes(before: Optional[dict], after: Optional[dict]) -> list[dict]:
     """What a pass changed, as readable lines for the transcript.
 
@@ -509,13 +515,14 @@ def describe_changes(before: Optional[dict], after: Optional[dict]) -> list[dict
             card = f": {npc['card']}" if _text(npc.get("card")) else ""
             if status == "planned":
                 add(f"New NPC waiting in the wings: {name}{card}", True)
+            elif status == "entering":
+                add(f"NPC arriving next reply: {name}{card}")
             else:
                 add(f"NPC enters: {name}{card}")
             continue
         if old.get("status") != status:
             add(
-                f"{name}: {str(old.get('status', 'planned')).replace('_', ' ')} → "
-                f"{str(status).replace('_', ' ')}",
+                f"{name}: {_status_label(old.get('status', 'planned'))} → {_status_label(status)}",
                 status == "planned",
             )
         if _text(npc.get("look")) and npc.get("look") != old.get("look") and old.get("look"):
@@ -602,14 +609,14 @@ def count_replies_since(
 
 
 def npcs_needing_portraits(state: Optional[dict], portraits: dict) -> list[dict]:
-    """On-stage NPCs with a look and no portrait of that NPC yet.
+    """Entering or on-stage NPCs with a look and no portrait of that NPC yet.
 
     portraits maps npc id to the name its portrait was drawn for. A different name
     under the same id is a different NPC (ids are reused across branches).
     """
     needed = []
     for npc in (state or {}).get("npcs", []):
-        if not isinstance(npc, dict) or npc.get("status") != "on_stage":
+        if not isinstance(npc, dict) or npc.get("status") not in PRESENT_STATUSES:
             continue
         if not _text(npc.get("look")) or not npc.get("id"):
             continue
@@ -620,13 +627,13 @@ def npcs_needing_portraits(state: Optional[dict], portraits: dict) -> list[dict]
 
 
 def scene_npcs(state: Optional[dict], portraits: dict) -> list[dict]:
-    """The NPCs on stage, with a ready portrait's file id where there is one.
+    """The NPCs in the scene, with a ready portrait's file id where there is one.
 
     portraits maps npc id to {"name", "status", "file_id"}.
     """
     scene = []
     for npc in (state or {}).get("npcs", []):
-        if not isinstance(npc, dict) or npc.get("status") != "on_stage":
+        if not isinstance(npc, dict) or npc.get("status") not in PRESENT_STATUSES:
             continue
         name = _text(npc.get("name"))
         if not name:
@@ -643,6 +650,43 @@ def scene_npcs(state: Optional[dict], portraits: dict) -> list[dict]:
             }
         )
     return scene
+
+
+def settle_entrances(state: Optional[dict]) -> Optional[dict]:
+    """After a reply has been written, entering NPCs are in the scene.
+
+    Done here rather than left to the GM, which kept re-issuing an introduction
+    without ever recording that it had happened.
+    """
+    if not state or not any(
+        isinstance(npc, dict) and npc.get("status") == "entering" for npc in state.get("npcs", [])
+    ):
+        return state
+    settled = copy.deepcopy(state)
+    for npc in settled["npcs"]:
+        if isinstance(npc, dict) and npc.get("status") == "entering":
+            npc["status"] = "on_stage"
+    return settled
+
+
+def promote_introduced(state: dict, note: str) -> dict:
+    """A planned NPC the note says to introduce is entering.
+
+    Covers a GM that writes "Introduce: <name>" out of habit instead of setting the
+    entering status, so the introduction is enforced either way.
+    """
+    lowered = (note or "").lower()
+    if "introduc" not in lowered:
+        return state
+    for npc in state.get("npcs", []):
+        if not isinstance(npc, dict) or npc.get("status") != "planned":
+            continue
+        name = _text(npc.get("name")).lower()
+        # "Introduce: The Static Echo", "introduce the stranger now": the name follows
+        # the word closely, within the same sentence.
+        if name and re.search(r"introduc\w*[^.\n]{0,40}?" + re.escape(name), lowered):
+            npc["status"] = "entering"
+    return state
 
 
 def _profile(character: Any, key: str) -> str:
@@ -845,28 +889,46 @@ def build_repair_messages(gm_messages: list[dict], reply: str) -> list[dict]:
     ]
 
 
+def _npc_card(npc: dict) -> str:
+    parts = [f"{_text(npc.get('name'))}: {_text(npc.get('card'))}".rstrip(": ")]
+    for label, key in (("Wants", "want"), ("Voice", "voice"), ("Looks", "look")):
+        if _text(npc.get(key)):
+            parts.append(f"{label}: {_text(npc.get(key))}")
+    return " ".join(p if p.endswith(".") else p + "." for p in parts)
+
+
 def render_director_notes(note: str, state: Optional[dict]) -> Optional[str]:
-    """The block appended to the actor's system message, or None if there is nothing."""
+    """The block appended to the actor's system message, or None if there is nothing.
+
+    An entering NPC leads the block as a requirement. As one line at the end of the
+    note ("Introduce: ...") the actor skipped it turn after turn.
+    """
     note = _text(note)
-    cards = []
-    for npc in (state or {}).get("npcs", []):
-        if not isinstance(npc, dict) or npc.get("status") != "on_stage":
-            continue
-        name = _text(npc.get("name"))
-        if not name:
-            continue
-        parts = [f"{name} (NPC, in the scene): {_text(npc.get('card'))}".rstrip(": ")]
-        for label, key in (("Wants", "want"), ("Voice", "voice"), ("Looks", "look")):
-            if _text(npc.get(key)):
-                parts.append(f"{label}: {_text(npc.get(key))}")
-        cards.append(" ".join(p if p.endswith(".") else p + "." for p in parts))
-    if not note and not cards:
+    npcs = [
+        npc
+        for npc in (state or {}).get("npcs", [])
+        if isinstance(npc, dict) and _text(npc.get("name"))
+    ]
+    entering = [_npc_card(npc) for npc in npcs if npc.get("status") == "entering"]
+    on_stage = [_npc_card(npc) for npc in npcs if npc.get("status") == "on_stage"]
+    if not note and not entering and not on_stage:
         return None
-    body = note
-    if cards:
-        body = (body + "\n\n" if body else "") + "NPCs in the scene, played by you:\n" + "\n".join(
-            f"- {card}" for card in cards
+    sections = []
+    if entering:
+        sections.append(
+            "Required in this reply: bring "
+            + ("this new character" if len(entering) == 1 else "these new characters")
+            + " into the scene. They arrive and act now, in person, as described; this is "
+            "not optional and not to be put off to a later reply. You play them.\n"
+            + "\n".join(f"- {card}" for card in entering)
         )
+    if note:
+        sections.append(note)
+    if on_stage:
+        sections.append(
+            "NPCs in the scene, played by you:\n" + "\n".join(f"- {card}" for card in on_stage)
+        )
+    body = "\n\n".join(sections)
     return (
         "<director_notes>\n"
         f"{NOTES_HEADER}\n\n"
@@ -941,7 +1003,11 @@ def get_director_notes(user_id: str, chat_id: str, message_id: Optional[str]) ->
     messages_map = Chats.get_messages_map_by_chat_id(chat_id)
     entry_id = find_state_entry_id(index, messages_map, message_id, inclusive=True)
     entry = GameMaster.get_entry(user_id, entry_id) if entry_id else None
-    return render_director_notes(entry.note, entry.state) if entry else None
+    if not entry:
+        return None
+    # The note may name an NPC to introduce without marking them entering.
+    state = promote_introduced(copy.deepcopy(entry.state or {}), entry.note)
+    return render_director_notes(entry.note, state)
 
 
 def inject_director_notes(
@@ -1027,12 +1093,30 @@ async def run_gm_pass(
                 # Cadence: skip turn passes until enough replies have gone by. The
                 # previous direction simply stays in force meanwhile.
                 cadence = session.config.get("cadence", 1)
-                if kind == "turn" and prior and cadence > 1:
+                pending = promote_introduced(
+                    copy.deepcopy(state or {}), prior.note if prior else ""
+                )
+                arriving = any(
+                    isinstance(npc, dict) and npc.get("status") == "entering"
+                    for npc in pending.get("npcs", [])
+                )
+                # Never skip while someone is entering: the next pass is what records
+                # their arrival, and skipping it would have them introduced twice.
+                if kind == "turn" and prior and cadence > 1 and not arriving:
                     since = count_replies_since(messages_map, message_id, prior.message_id)
                     if since < cadence:
                         return None
                 if state is None and kind in ("turn", "consult"):
                     kind = "setup"
+                before = state
+                # A turn pass follows a written reply, so whoever was entering has
+                # now arrived. Other passes come before the next reply is written.
+                if kind == "turn" and state is not None:
+                    # Includes anyone the last note only named to introduce, since the
+                    # actor was required to bring them in too.
+                    state = settle_entrances(
+                        promote_introduced(copy.deepcopy(state), prior.note if prior else "")
+                    )
 
                 await emit({"status": "running"})
                 models = request.app.state.MODELS
@@ -1115,13 +1199,13 @@ async def run_gm_pass(
                     await emit({"status": "error"})
                     return None
 
-                new_state = apply_plan(state, plan)
+                note = _clip(_text(plan.get("note")), 4000)
+                new_state = promote_introduced(apply_plan(state, plan), note)
                 observations = [
                     _clip(o, 500) for o in plan.get("observations") or [] if isinstance(o, str)
                 ][:20]
-                note = _clip(_text(plan.get("note")), 4000)
                 patch = {k: plan[k] for k in ("update", "remove") if k in plan}
-                patch["changes"] = describe_changes(state, new_state)
+                patch["changes"] = describe_changes(before, new_state)
                 entry = GameMaster.add_entry(
                     user.id,
                     chat_id,

@@ -168,7 +168,7 @@ def test_notes_carry_on_stage_npc_cards_only():
     assert notes.startswith("<director_notes>")
     assert notes.endswith("</director_notes>")
     assert "Sam: hold your ground." in notes
-    assert "Marek (NPC, in the scene): the landlord's nephew." in notes
+    assert "NPCs in the scene, played by you:\n- Marek: the landlord's nephew." in notes
     assert "Looks: grey wool overcoat." in notes
     assert "Ivo" not in notes
 
@@ -406,3 +406,51 @@ def test_every_pass_ends_by_restating_the_reply_shape():
     assert turn.rstrip().endswith("without it nothing you decide reaches the story.")
     talk_plan = build_gm_messages(**common, kind="talk_plan", talk="hi", talk_reply="hello")
     assert talk_plan[1]["content"].rstrip().endswith("reaches the story.")
+
+
+def test_an_entering_npc_leads_the_notes_as_a_requirement():
+    state = {
+        "npcs": [
+            {"id": "n1", "name": "Marek", "status": "entering", "card": "the landlord's nephew",
+             "look": "grey wool overcoat"},
+            {"id": "n2", "name": "Ivo", "status": "on_stage", "card": "a buyer"},
+        ]
+    }
+    notes = render_director_notes("Sam: hold your ground.", state)
+    body = notes.split("\n\n", 1)[1]
+    assert body.startswith("Required in this reply: bring this new character into the scene.")
+    assert "- Marek: the landlord's nephew. Looks: grey wool overcoat." in body
+    # The requirement comes first, then the GM's note, then who is already present.
+    assert body.index("Marek") < body.index("Sam: hold your ground.") < body.index("Ivo")
+
+
+def test_entering_npcs_arrive_once_a_reply_is_written():
+    from open_webui.utils.game_master import settle_entrances
+
+    state = {"npcs": [{"id": "n1", "name": "Marek", "status": "entering"},
+                      {"id": "n2", "name": "Ivo", "status": "planned"}]}
+    settled = settle_entrances(state)
+    assert [n["status"] for n in settled["npcs"]] == ["on_stage", "planned"]
+    assert state["npcs"][0]["status"] == "entering"
+    assert settle_entrances(None) is None
+
+
+def test_an_introduce_line_brings_a_planned_npc_in():
+    from open_webui.utils.game_master import promote_introduced
+
+    state = {"npcs": [{"id": "n1", "name": "Marek", "status": "planned"},
+                      {"id": "n2", "name": "Ivo", "status": "planned"},
+                      {"id": "n3", "name": "Nell", "status": "off_stage"}]}
+    promote_introduced(
+        state,
+        "Sam: stall him.\nWorld: Introduce: Marek (n1). He bleeds in through the door. Nell watches.",
+    )
+    assert [n["status"] for n in state["npcs"]] == ["entering", "planned", "off_stage"]
+    # Merely mentioning someone does not bring them in.
+    other = {"npcs": [{"id": "n2", "name": "Ivo", "status": "planned"}]}
+    assert promote_introduced(other, "Introduce tension. Ivo is mentioned later.")["npcs"][0]["status"] == "planned"
+
+
+def test_portraits_start_as_soon_as_an_npc_is_entering():
+    state = {"npcs": [{"id": "n1", "name": "Marek", "status": "entering", "look": "grey coat"}]}
+    assert [n["id"] for n in npcs_needing_portraits(state, {})] == ["n1"]

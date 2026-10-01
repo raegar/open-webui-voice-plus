@@ -18,6 +18,7 @@
 	export let onStatus: (status: GameMasterStatus) => void = () => {};
 
 	const STATUS_LABELS: Record<string, string> = {
+		entering: 'Arriving next reply',
 		on_stage: 'In the scene',
 		off_stage: 'Off stage',
 		gone: 'Gone'
