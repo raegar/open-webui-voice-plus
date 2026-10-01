@@ -72,6 +72,7 @@
 	import Note from '../icons/Note.svelte';
 	import VideoCamera from '../icons/VideoCamera.svelte';
 	import UserCircleSolid from '../icons/UserCircleSolid.svelte';
+	import BookOpen from '../icons/BookOpen.svelte';
 	import { slide } from 'svelte/transition';
 	import HotkeyHint from '../common/HotkeyHint.svelte';
 
@@ -790,6 +791,29 @@
 					</div>
 				{/if}
 
+				{#if $user?.role === 'admin' && !$settings?.hidePrivate}
+					<div>
+						<Tooltip content="Memories" placement="right">
+							<a
+								class="cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
+								href="/memories"
+								on:click={async (e) => {
+									e.stopImmediatePropagation();
+									e.preventDefault();
+									goto('/memories');
+									itemClickHandler();
+								}}
+								draggable="false"
+								aria-label="Memories"
+							>
+								<div class="self-center flex items-center justify-center size-9">
+									<BookOpen className="size-4.5" />
+								</div>
+							</a>
+						</Tooltip>
+					</div>
+				{/if}
+
 				{#if ($config?.features?.enable_notes ?? false) && ($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true))}
 					<div class="">
 						<Tooltip content={$i18n.t('Notes')} placement="right">
@@ -1059,6 +1083,27 @@
 								</div>
 								<div class="flex self-center translate-y-[0.5px]">
 									<div class="self-center text-sm font-primary">Characters</div>
+								</div>
+							</a>
+						</div>
+					{/if}
+
+					<!-- Memories hold every account's messages, private chats included. -->
+					{#if $user?.role === 'admin' && !$settings?.hidePrivate}
+						<div class="px-[0.4375rem] flex justify-center text-gray-800 dark:text-gray-200">
+							<a
+								id="sidebar-memories-button"
+								class="grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
+								href="/memories"
+								on:click={itemClickHandler}
+								draggable="false"
+								aria-label="Memories"
+							>
+								<div class="self-center">
+									<BookOpen className="size-4.5" strokeWidth="2" />
+								</div>
+								<div class="flex self-center translate-y-[0.5px]">
+									<div class="self-center text-sm font-primary">Memories</div>
 								</div>
 							</a>
 						</div>

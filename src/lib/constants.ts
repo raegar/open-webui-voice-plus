@@ -13,6 +13,7 @@ export const AUDIO_API_BASE_URL = `${WEBUI_BASE_URL}/api/v1/audio`;
 export const IMAGES_API_BASE_URL = `${WEBUI_BASE_URL}/api/v1/images`;
 export const VIDEOS_API_BASE_URL = `${WEBUI_BASE_URL}/api/v1/videos`;
 export const GM_API_BASE_URL = `${WEBUI_BASE_URL}/api/v1/gm`;
+export const MEMORY_BROWSER_API_BASE_URL = `${WEBUI_BASE_URL}/api/v1/memory-browser`;
 export const RETRIEVAL_API_BASE_URL = `${WEBUI_BASE_URL}/api/v1/retrieval`;
 
 export const WEBUI_VERSION = APP_VERSION;

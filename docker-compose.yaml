@@ -11,6 +11,10 @@ services:
     volumes:
       - open-webui:/app/backend/data
       - E:/Development/productivity/sweet-mail-biscuits:/app/sweetmail
+      # The persistent memory pipeline's data, for the Memories browser. The
+      # pipelines container writes the same files; both run in Docker's VM, so
+      # SQLite's locks coordinate them.
+      - C:/AI/persistent-ai-memory/.ai_memory:/app/ai_memory
     extra_hosts:
       - host.docker.internal:host-gateway
     environment:
@@ -25,6 +29,7 @@ services:
       # A 15s Ref2VA render can exceed 11 minutes; the 600s default abandons
       # the poll while ComfyUI is still working, orphaning a finished video.
       - COMFYUI_VIDEO_TIMEOUT=2400
+      - MEMORY_BROWSER_DB=/app/ai_memory/conversations.db
       - |
         IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE=### Task:
         Extract or generate an image generation prompt based on the assistant's most recent response in the chat history. The assistant may have described a scene, character, or image it wants to create — your job is to distill that into a clean, detailed image generation prompt.
