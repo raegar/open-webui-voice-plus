@@ -241,6 +241,26 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 	// spoken line rather than adding to it.
 	const dialogueShotBudget = (seconds: number) => (seconds <= 5 ? 1 : seconds <= 10 ? 2 : 3);
 
+	// Short clips cannot hold a scene, and trimming every part of one to fit leaves each
+	// beat too rushed to read. Below this length the drafter cuts to the scene's single
+	// key moment instead; longer clips keep the normal trim-the-dialogue approach.
+	const SHORT_CLIP_SECONDS = 5;
+	const shortClipDirection = (seconds: number, mode: WorkflowMode) =>
+		seconds > SHORT_CLIP_SECONDS
+			? ''
+			: `
+Editing for a ${seconds}-second clip:
+This is far too short to tell the whole scene, so do not try. Edit the creative direction down to its single most important moment - the beat the scene turns on, the image someone would remember - and film only that.
+- One shot, one continuous take, no cuts. ${
+					mode === 'reference'
+						? 'Write [Shot 1] only, with no later [Shot N] entries.'
+						: 'The timeline segments are the progression of that one take, not separate shots.'
+				}
+- One action, carried through to its end. Drop setup, lead-up, aftermath and secondary action entirely rather than compressing them: what came before is implied by where people stand and how they look, not staged.
+- At most one short line of dialogue, from one speaker, and only if speaking is the key moment. If the moment is a look, a touch or a reaction, let it play without words.
+- Spend the description on that moment: tight framing, the exact gesture or expression, and the other person's reaction happening at the same time.
+`;
+
 	/** Words actually spoken: the contents of every <d> tag, minus the [Language] marker. */
 	const countSpokenWords = (text: string): number =>
 		[...(text ?? '').matchAll(/<d>([\s\S]*?)<\/d>/gi)]
@@ -876,13 +896,13 @@ Hard constraints:
 - Workflow: ${workflowLabel()}
 - Spoken words: ${speechBudget(duration)} at most, counted across every <d> tag combined
 - Shots containing dialogue: ${dialogueShotBudget(duration)} at most
-${
-	styleSection
-		? `
+${shortClipDirection(duration, workflowMode)}${
+							styleSection
+								? `
 ${styleSection}
 `
-		: ''
-}
+								: ''
+						}
 Frame metadata only (the image pixels are intentionally unavailable to you):
 ${frameMetadata()}
 ${
