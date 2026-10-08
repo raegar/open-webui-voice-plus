@@ -3,7 +3,7 @@
 	import dayjs from 'dayjs';
 
 	import { createEventDispatcher, onDestroy } from 'svelte';
-	import { onMount, tick, getContext } from 'svelte';
+	import { onMount, tick, getContext, beforeUpdate, afterUpdate } from 'svelte';
 	import { goto } from '$app/navigation';
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType, t } from 'i18next';
@@ -30,7 +30,9 @@
 	import { findSteeringEntry, getSceneNpcs } from '$lib/apis/gamemaster';
 	import { synthesizeOpenAISpeech } from '$lib/apis/audio';
 	import { imageGenerations } from '$lib/apis/images';
-	import { getChatVideoCharacters, videoGenerations } from '$lib/apis/videos';
+	import { getChatVideoCharacters, videoGenerations, type VideoCharacter } from '$lib/apis/videos';
+	import { excludeAttachedNpcs } from '$lib/utils/sceneCast';
+	import { captureReadingPosition, restoreReadingPosition } from '$lib/utils/readingPosition';
 	import {
 		copyToClipboard as _copyToClipboard,
 		approximateToHumanReadable,
@@ -185,6 +187,26 @@
 
 	let contentContainerElement: HTMLDivElement;
 	let buttonsContainerElement: HTMLDivElement;
+	let renderedMessageId = messageId;
+	let renderedDone = message.done;
+	let readingPosition: ReturnType<typeof captureReadingPosition> = null;
+
+	beforeUpdate(() => {
+		const done = history.messages[messageId]?.done ?? message.done;
+		if (renderedMessageId === messageId && !renderedDone && done) {
+			readingPosition = captureReadingPosition(
+				contentContainerElement,
+				document.getElementById('messages-container')
+			);
+		}
+		renderedMessageId = messageId;
+		renderedDone = done;
+	});
+
+	afterUpdate(() => {
+		restoreReadingPosition(readingPosition);
+		readingPosition = null;
+	});
 	let showDeleteConfirm = false;
 
 	let model = null;
@@ -303,9 +325,11 @@
 			appliesTo?: string;
 			state: string;
 		}[] = [];
+		let attachedCharacters: VideoCharacter[] = [];
 		if (chatId) {
 			try {
 				const attached = await getChatVideoCharacters(localStorage.token, chatId);
+				attachedCharacters = attached;
 				characters = attached
 					.filter((character) => (character?.image_file_ids ?? []).length > 0)
 					.map((character) => ({
@@ -350,7 +374,7 @@
 			// they only take reference slots the chat's own characters leave free.
 			try {
 				const npcs = await getSceneNpcs(localStorage.token, chatId, messageId);
-				for (const npc of npcs) {
+				for (const npc of excludeAttachedNpcs(npcs, attachedCharacters)) {
 					characters.push({
 						name: npc.name,
 						description: [npc.card, npc.look ? `Looks: ${npc.look}` : '']

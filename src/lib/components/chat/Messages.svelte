@@ -15,6 +15,7 @@
 	import { toast } from 'svelte-sonner';
 	import { getChatList, updateChatById } from '$lib/apis/chats';
 	import { copyToClipboard, extractCurlyBraceWords } from '$lib/utils';
+	import { scrollToBottomAfterRender } from '$lib/utils/chatScroll';
 
 	import Message from './Messages/Message.svelte';
 	import Loader from '../common/Loader.svelte';
@@ -128,15 +129,19 @@
 	$: handleHistoryChange(history.currentId, history.messages);
 
 	$: if (autoScroll && bottomPadding) {
-		(async () => {
-			await tick();
-			scrollToBottom();
-		})();
+		followToBottom();
 	}
+
+	const followToBottom = () =>
+		scrollToBottomAfterRender(
+			() => document.getElementById('messages-container'),
+			() => autoScroll,
+			tick
+		);
 
 	const scrollToBottom = () => {
 		const element = document.getElementById('messages-container');
-		element.scrollTop = element.scrollHeight;
+		if (element) element.scrollTop = element.scrollHeight;
 	};
 
 	const updateChat = async () => {
@@ -429,15 +434,21 @@
 
 	onDestroy(() => {
 		cancelAnimationFrame(pendingRebuild);
+		clearTimeout(scrollTimeout);
 	});
 
+	let scrollTimeout: ReturnType<typeof setTimeout>;
 	const triggerScroll = () => {
 		if (autoScroll) {
 			const element = document.getElementById('messages-container');
+			if (!element) return;
 			autoScroll = element.scrollHeight - element.scrollTop <= element.clientHeight + 50;
-			setTimeout(() => {
-				scrollToBottom();
-			}, 100);
+			clearTimeout(scrollTimeout);
+			if (autoScroll) {
+				scrollTimeout = setTimeout(() => {
+					followToBottom();
+				}, 100);
+			}
 		}
 	};
 </script>

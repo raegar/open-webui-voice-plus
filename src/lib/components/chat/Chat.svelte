@@ -13,6 +13,7 @@
 	import { get, type Unsubscriber, type Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
 	import { WEBUI_BASE_URL } from '$lib/constants';
+	import { scrollToBottomAfterRender } from '$lib/utils/chatScroll';
 
 	import {
 		chatId,
@@ -534,22 +535,14 @@
 					}
 				} else if (type === 'chat:message:embeds' || type === 'embeds') {
 					message.embeds = data.embeds;
-
-					// Auto-scroll to the embed once it's rendered in the DOM
-					await tick();
-					setTimeout(() => {
-						const embedEl = document.getElementById(`${event.message_id}-embeds-container`);
-						if (embedEl) {
-							embedEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-						}
-					}, 100);
+					scheduleScrollToBottom();
 				} else if (type === 'chat:message:error') {
 					message.error = data.error;
 				} else if (type === 'chat:message:follow_ups') {
 					message.followUps = data.follow_ups;
 
 					if (autoScroll) {
-						scrollToBottom('smooth');
+						scheduleScrollToBottom();
 					}
 				} else if (type === 'chat:message:favorite') {
 					// Update message favorite status
@@ -1364,26 +1357,35 @@
 		}
 	};
 
-	const scrollToBottom = async (behavior = 'auto') => {
-		await tick();
-		if (messagesContainerElement) {
-			messagesContainerElement.scrollTo({
-				top: messagesContainerElement.scrollHeight,
-				behavior
-			});
-		}
-	};
+	const scrollToBottom = () =>
+		scrollToBottomAfterRender(
+			() => messagesContainerElement,
+			() => autoScroll,
+			tick
+		);
 
 	let scrollRAF = null;
 	let contentsRAF = null;
 	const scheduleScrollToBottom = () => {
-		if (!scrollRAF) {
+		if (autoScroll && scrollRAF === null) {
 			scrollRAF = requestAnimationFrame(async () => {
 				scrollRAF = null;
 				await scrollToBottom();
 			});
 		}
 	};
+
+	const pauseAutoScroll = () => {
+		autoScroll = false;
+		cancelAnimationFrame(scrollRAF);
+		scrollRAF = null;
+	};
+	let lastTouchY: number | null = null;
+
+	onDestroy(() => {
+		pauseAutoScroll();
+		cancelAnimationFrame(contentsRAF);
+	});
 	const chatCompletedHandler = async (_chatId, modelId, responseMessageId, messages) => {
 		// Fire-and-forget: the reply is already on screen, and continuity bookkeeping
 		// must never delay the conversation or surface an error into it.
@@ -1905,6 +1907,8 @@
 			}
 		}
 
+		// Sending a new prompt deliberately resumes following the conversation.
+		autoScroll = true;
 		messageInput?.setText('');
 		prompt = '';
 
@@ -2970,10 +2974,30 @@
 								class=" pb-2.5 flex flex-col justify-between w-full flex-auto overflow-auto h-0 max-w-full z-10 scrollbar-hidden"
 								id="messages-container"
 								bind:this={messagesContainerElement}
+								on:wheel|passive={(e) => {
+									if (e.deltaY < 0 && messagesContainerElement.scrollTop > 0) pauseAutoScroll();
+								}}
+								on:touchstart|passive={(e) => {
+									lastTouchY = e.touches[0]?.clientY ?? null;
+								}}
+								on:touchmove|passive={(e) => {
+									const touchY = e.touches[0]?.clientY ?? null;
+									if (
+										touchY !== null &&
+										lastTouchY !== null &&
+										touchY > lastTouchY &&
+										messagesContainerElement.scrollTop > 0
+									) {
+										pauseAutoScroll();
+									}
+									lastTouchY = touchY;
+								}}
 								on:scroll={(e) => {
-									autoScroll =
+									const atBottom =
 										messagesContainerElement.scrollHeight - messagesContainerElement.scrollTop <=
 										messagesContainerElement.clientHeight + 5;
+									if (atBottom) autoScroll = true;
+									else pauseAutoScroll();
 								}}
 							>
 								<div class=" h-full w-full flex flex-col">
