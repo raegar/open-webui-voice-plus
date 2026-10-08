@@ -288,6 +288,63 @@ async def regenerate_npc_portrait(
     return _status(user, chat_id, chat)
 
 
+# The image types Video Studio can use as a reference picture.
+PORTRAIT_UPLOAD_TYPES = ("image/png", "image/jpeg", "image/webp")
+
+
+class PortraitUploadForm(BaseModel):
+    # An Open WebUI file the caller has already uploaded.
+    file_id: str = Field(min_length=1, max_length=200)
+
+
+@router.post("/chats/{chat_id}/npcs/{npc_id}/portrait/upload")
+async def upload_npc_portrait(
+    chat_id: str,
+    npc_id: str,
+    form_data: PortraitUploadForm,
+    user=Depends(get_verified_user),
+):
+    """Use the player's own picture as an NPC's portrait in this chat.
+
+    It replaces the generated one for good: it is what the Cast shows and what Video
+    Studio uses as their reference, and automatic portraits never draw over it.
+    Regenerating draws a new one in its place.
+    """
+    from open_webui.models.files import Files
+
+    chat = _chat_or_404(chat_id, user)
+    leaf, messages = _leaf(chat)
+    index = GameMaster.get_entry_index(user.id, chat_id)
+    current_id = find_state_entry_id(index, messages, leaf, inclusive=True)
+    current = GameMaster.get_entry(user.id, current_id) if current_id else None
+    npcs = ((current.state or {}).get("npcs") or []) if current else []
+    npc = next((n for n in npcs if isinstance(n, dict) and n.get("id") == npc_id), None)
+    if not npc or not (npc.get("name") or "").strip():
+        raise HTTPException(status_code=404, detail="No such NPC in the current plan")
+
+    file_item = Files.get_file_by_id(form_data.file_id)
+    if not file_item or file_item.user_id != user.id:
+        raise HTTPException(status_code=400, detail="Unknown image")
+    content_type = ((file_item.meta or {}).get("content_type") or "").lower()
+    if content_type not in PORTRAIT_UPLOAD_TYPES:
+        raise HTTPException(status_code=400, detail="Use a PNG, JPEG or WebP image")
+
+    GameMaster.set_portrait(
+        user.id,
+        chat_id,
+        npc_id,
+        name=npc["name"].strip(),
+        look=(npc.get("look") or "").strip(),
+        status="ready",
+        file_id=file_item.id,
+        seed="",
+        prompt="",
+        error="",
+        source="uploaded",
+    )
+    return _status(user, chat_id, chat)
+
+
 @router.get("/chats/{chat_id}/scene-npcs")
 async def get_game_master_scene_npcs(
     chat_id: str, message_id: Optional[str] = None, user=Depends(get_verified_user)

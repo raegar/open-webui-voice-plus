@@ -317,9 +317,13 @@ class GameMasterTable:
                     created_at=now,
                 )
                 db.add(row)
-            for key in ("name", "look", "status", "file_id", "seed", "error", "prompt"):
+            for key in ("name", "look", "status", "file_id", "seed", "error", "prompt", "source"):
                 if fields.get(key) is not None:
                     setattr(row, key, str(fields[key]))
+            # Queueing a drawing replaces an uploaded picture, so the row is a generated
+            # portrait again unless the caller says otherwise.
+            if fields.get("status") == "queued" and fields.get("source") is None:
+                row.source = "generated"
             row.updated_at = now
             db.commit()
             db.refresh(row)
@@ -345,6 +349,9 @@ class GMPortrait(Base):
     error = Column(Text, nullable=False, default="")
     # The image prompt it was drawn from, written for this subject by the chat model.
     prompt = Column(Text, nullable=False, default="")
+    # generated | uploaded. An uploaded picture is the player's own choice and stays
+    # until they replace it; automatic portraits never draw over it.
+    source = Column(String, nullable=False, default="generated")
     created_at = Column(BigInteger, nullable=False)
     updated_at = Column(BigInteger, nullable=False)
 
@@ -358,6 +365,7 @@ class GMPortraitModel(BaseModel):
     seed: str
     error: str
     prompt: str
+    source: str
     updated_at: int
 
 
@@ -371,6 +379,7 @@ def _portrait_model(row: GMPortrait) -> GMPortraitModel:
         seed=row.seed or "",
         error=row.error or "",
         prompt=row.prompt or "",
+        source=row.source or "generated",
         updated_at=row.updated_at or 0,
     )
 
@@ -384,6 +393,7 @@ ADDED_COLUMNS = {
     },
     "gm_portrait": {
         "prompt": "TEXT NOT NULL DEFAULT ''",
+        "source": "VARCHAR NOT NULL DEFAULT 'generated'",
     },
 }
 

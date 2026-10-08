@@ -23,6 +23,8 @@ export type GameMasterPortrait = {
 	error: string;
 	/** The image prompt it was drawn from, written for this subject. */
 	prompt: string;
+	/** uploaded: the player's own picture, which automatic portraits never replace. */
+	source: 'generated' | 'uploaded';
 	updated_at: number;
 };
 
@@ -151,6 +153,18 @@ export const regenerateNpcPortrait = async (
 	await gmRequest(token, `${chatPath(chatId)}/npcs/${encodeURIComponent(npcId)}/portrait`, {
 		method: 'POST',
 		body: JSON.stringify({ direction })
+	});
+
+/** Use an already-uploaded image file as an NPC's portrait in this chat, for good. */
+export const uploadNpcPortrait = async (
+	token: string,
+	chatId: string,
+	npcId: string,
+	fileId: string
+): Promise<GameMasterStatus> =>
+	await gmRequest(token, `${chatPath(chatId)}/npcs/${encodeURIComponent(npcId)}/portrait/upload`, {
+		method: 'POST',
+		body: JSON.stringify({ file_id: fileId })
 	});
 
 export const getSceneNpcs = async (

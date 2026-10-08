@@ -2,8 +2,10 @@
 	import { getContext } from 'svelte';
 	import { toast } from 'svelte-sonner';
 
+	import { uploadFile } from '$lib/apis/files';
 	import {
 		regenerateNpcPortrait,
+		uploadNpcPortrait,
 		type GameMasterPortrait,
 		type GameMasterStatus
 	} from '$lib/apis/gamemaster';
@@ -57,6 +59,37 @@
 		redrawing = redrawing === npc.id ? '' : npc.id;
 		direction = '';
 	};
+
+	// The player's own picture in place of the generated one. It sticks: automatic
+	// portraits never draw over it, and Video Studio uses it as the NPC's reference.
+	const UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+	const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+	let uploading = '';
+
+	const uploadPortrait = async (npc: any, input: HTMLInputElement) => {
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file) return;
+		if (!UPLOAD_TYPES.includes(file.type)) {
+			toast.error($i18n.t('Use a PNG, JPEG or WebP image.'));
+			return;
+		}
+		if (file.size > MAX_UPLOAD_BYTES) {
+			toast.error($i18n.t('That image is over 25 MB.'));
+			return;
+		}
+		uploading = npc.id;
+		try {
+			const uploaded = await uploadFile(localStorage.token, file);
+			if (!uploaded?.id) throw new Error('Upload failed');
+			onStatus(await uploadNpcPortrait(localStorage.token, chatId, npc.id, uploaded.id));
+			redrawing = '';
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			uploading = '';
+		}
+	};
 </script>
 
 {#if npcs.length}
@@ -94,6 +127,24 @@
 					</div>
 					{#if npc.card}<div>{npc.card}</div>{/if}
 					{#if npc.look}<div class="text-gray-500">{npc.look}</div>{/if}
+					{#if portrait?.source === 'uploaded' && portrait.status === 'ready'}
+						<div class="text-gray-500">{$i18n.t('Using your uploaded picture')}</div>
+					{/if}
+					<label
+						class="mt-0.5 mr-2 inline-block cursor-pointer text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 {uploading ===
+						npc.id
+							? 'pointer-events-none opacity-50'
+							: ''}"
+					>
+						{uploading === npc.id ? $i18n.t('Uploading…') : $i18n.t('Upload image…')}
+						<input
+							type="file"
+							accept={UPLOAD_TYPES.join(',')}
+							class="hidden"
+							disabled={uploading === npc.id}
+							on:change={(e) => uploadPortrait(npc, e.currentTarget)}
+						/>
+					</label>
 					{#if canDraw && npc.look}
 						<button
 							class="mt-0.5 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 disabled:opacity-50"
@@ -120,7 +171,7 @@
 							</div>
 						{/if}
 					{/if}
-					{#if portrait?.prompt}
+					{#if portrait?.prompt && portrait.source !== 'uploaded'}
 						<details class="mt-0.5">
 							<summary class="cursor-pointer text-gray-500">{$i18n.t('Prompt used')}</summary>
 							<div class="text-gray-500 mt-0.5">{portrait.prompt}</div>
