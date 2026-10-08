@@ -61,6 +61,9 @@ class VideoCharacter(Base):
     applies_to_id = Column(String, nullable=False, default="")
     # Hidden everywhere while the user's work mode (hidePrivate setting) is on.
     private = Column(Boolean, nullable=False, default=False)
+    # Kept out of the library and the chat pickers, but still works in any chat it
+    # is already attached to; unlike delete, nothing is detached.
+    archived = Column(Boolean, nullable=False, default=False)
     created_at = Column(BigInteger, nullable=False)
     updated_at = Column(BigInteger, nullable=False)
 
@@ -102,6 +105,7 @@ class VideoCharacterModel(BaseModel):
     kind: str
     applies_to_id: str
     private: bool = False
+    archived: bool = False
     # Only populated by get_for_chat; a library listing has no per-chat state.
     state: str = ""
     outfit: Optional[VideoOutfitModel] = None
@@ -117,6 +121,7 @@ class VideoCharacterForm(BaseModel):
     kind: Literal["character", "location", "outfit"] = "character"
     applies_to_id: str = ""
     private: bool = False
+    archived: bool = False
 
 
 class VideoCharacterUpdateForm(BaseModel):
@@ -127,6 +132,7 @@ class VideoCharacterUpdateForm(BaseModel):
     kind: Optional[Literal["character", "location", "outfit"]] = None
     applies_to_id: Optional[str] = None
     private: Optional[bool] = None
+    archived: Optional[bool] = None
 
 
 def _to_model(row: VideoCharacter) -> VideoCharacterModel:
@@ -144,6 +150,7 @@ def _to_model(row: VideoCharacter) -> VideoCharacterModel:
         kind=row.kind if row.kind in REFERENCE_KINDS else "character",
         applies_to_id=row.applies_to_id or "",
         private=bool(row.private),
+        archived=bool(row.archived),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -179,6 +186,7 @@ class VideoCharactersTable:
                 kind=form.kind,
                 applies_to_id=form.applies_to_id or "",
                 private=form.private,
+                archived=form.archived,
                 position=0,
                 created_at=now,
                 updated_at=now,
@@ -211,6 +219,8 @@ class VideoCharactersTable:
                 row.applies_to_id = form.applies_to_id
             if form.private is not None:
                 row.private = form.private
+            if form.archived is not None:
+                row.archived = form.archived
             row.updated_at = int(time.time())
             db.commit()
             db.refresh(row)
@@ -368,6 +378,7 @@ def _add_missing_columns() -> None:
             "kind": "VARCHAR NOT NULL DEFAULT 'character'",
             "applies_to_id": "VARCHAR NOT NULL DEFAULT ''",
             "private": "BOOLEAN NOT NULL DEFAULT FALSE",
+            "archived": "BOOLEAN NOT NULL DEFAULT FALSE",
         }
         missing = {n: d for n, d in wanted.items() if n not in existing}
         link_existing = {

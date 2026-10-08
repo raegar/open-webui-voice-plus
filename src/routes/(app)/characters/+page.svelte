@@ -82,6 +82,11 @@
 
 	// Work mode leaves private characters off the page entirely.
 	$: visibleCharacters = $settings?.hidePrivate ? characters.filter((c) => !c.private) : characters;
+	// Archived entries get a view of their own rather than mixing in with the rest.
+	let showArchived = false;
+	$: archivedCount = visibleCharacters.filter((c) => c.archived).length;
+	$: viewCharacters = visibleCharacters.filter((c) => !!c.archived === showArchived);
+	$: if (showArchived && archivedCount === 0) showArchived = false;
 
 	type KindFilter = 'all' | (typeof KINDS)[number]['value'];
 	type SortOrder = 'name' | 'name-desc' | 'newest' | 'oldest';
@@ -112,7 +117,7 @@
 	};
 	$: saveView(kindFilter, sortOrder);
 
-	$: kindCounts = visibleCharacters.reduce(
+	$: kindCounts = viewCharacters.reduce(
 		(counts, c) => {
 			const kind = c.kind ?? 'character';
 			counts[kind] = (counts[kind] ?? 0) + 1;
@@ -122,7 +127,7 @@
 	);
 	// Filters on saved values, not drafts, so a card does not vanish mid-edit.
 	$: query = search.trim().toLowerCase();
-	$: shownCharacters = visibleCharacters
+	$: shownCharacters = viewCharacters
 		.filter((c) => kindFilter === 'all' || (c.kind ?? 'character') === kindFilter)
 		.filter(
 			(c) =>
@@ -183,6 +188,7 @@
 			newName = '';
 			// A new entry is always a character; make sure the filters are not hiding it.
 			search = '';
+			showArchived = false;
 			if (kindFilter !== 'character') kindFilter = 'all';
 		} catch (error) {
 			toast.error(`${error}`);
@@ -240,6 +246,23 @@
 		try {
 			const updated = await updateVideoCharacter(localStorage.token, character.id, patch);
 			characters = characters.map((c) => (c.id === updated.id ? updated : c));
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			busyId = null;
+		}
+	};
+
+	const setArchived = async (character: VideoCharacter, archived: boolean) => {
+		busyId = character.id;
+		try {
+			const updated = await updateVideoCharacter(localStorage.token, character.id, { archived });
+			characters = characters.map((c) => (c.id === updated.id ? updated : c));
+			toast.success(
+				archived
+					? `${character.name} archived. Chats they are already in are unaffected.`
+					: `${character.name} restored to your library.`
+			);
 		} catch (error) {
 			toast.error(`${error}`);
 		} finally {
@@ -854,7 +877,7 @@ ${VISION_RULES}`
 						>
 							{#each [{ value: 'all', label: 'All' }, ...KINDS] as k}
 								{@const count =
-									k.value === 'all' ? visibleCharacters.length : (kindCounts[k.value] ?? 0)}
+									k.value === 'all' ? viewCharacters.length : (kindCounts[k.value] ?? 0)}
 								<button
 									class="rounded-lg px-2.5 py-1 {kindFilter === k.value
 										? 'bg-gray-100 font-medium dark:bg-gray-800'
@@ -876,7 +899,27 @@ ${VISION_RULES}`
 								<option value={s.value}>{s.label}</option>
 							{/each}
 						</select>
+						{#if archivedCount > 0}
+							<button
+								class="shrink-0 rounded-xl border px-2.5 py-1.5 text-xs {showArchived
+									? 'border-gray-500 bg-gray-100 font-medium dark:bg-gray-800'
+									: 'border-gray-200 text-gray-500 hover:text-gray-900 dark:border-gray-700 dark:hover:text-gray-100'}"
+								aria-pressed={showArchived}
+								on:click={() => (showArchived = !showArchived)}
+							>
+								Archived <span class="text-gray-400">{archivedCount}</span>
+							</button>
+						{/if}
 					</div>
+					{#if showArchived}
+						<p class="-mt-2 text-xs text-gray-500">
+							Archived entries are left out of the chat character pickers. Any chat they are
+							already in keeps them.
+							<button class="underline" on:click={() => (showArchived = false)}
+								>Back to library</button
+							>
+						</p>
+					{/if}
 				{/if}
 
 				{#if loading}
@@ -887,9 +930,14 @@ ${VISION_RULES}`
 					>
 						{#if characters.length === 0}
 							No characters yet. Add one above, then give them a description and reference images.
-						{:else if filtered && visibleCharacters.length > 0}
+						{:else if filtered && viewCharacters.length > 0}
 							Nothing matches.
 							<button class="font-medium underline" on:click={clearFilters}>Clear filters</button>
+						{:else if !showArchived && archivedCount > 0}
+							Everything here is archived.
+							<button class="font-medium underline" on:click={() => (showArchived = true)}
+								>Show archived</button
+							>
 						{:else}
 							No characters to show.
 						{/if}
@@ -897,7 +945,7 @@ ${VISION_RULES}`
 				{:else}
 					{#if filtered}
 						<p class="-mt-2 text-xs text-gray-500">
-							Showing {shownCharacters.length} of {visibleCharacters.length}.
+							Showing {shownCharacters.length} of {viewCharacters.length}.
 							<button class="underline" on:click={clearFilters}>Clear</button>
 						</p>
 					{/if}
@@ -919,6 +967,15 @@ ${VISION_RULES}`
 										class="shrink-0 text-xs text-gray-500 hover:underline disabled:opacity-40 disabled:no-underline"
 										disabled={busyId === character.id}
 										on:click={() => duplicateCharacter(character)}>Duplicate</button
+									>
+									<button
+										class="shrink-0 text-xs text-gray-500 hover:underline disabled:opacity-40 disabled:no-underline"
+										disabled={busyId === character.id}
+										title={character.archived
+											? 'Put back in the library and the chat pickers'
+											: 'Hide from the library and the chat pickers; chats already using it are unaffected'}
+										on:click={() => setArchived(character, !character.archived)}
+										>{character.archived ? 'Restore' : 'Archive'}</button
 									>
 									<button
 										class="shrink-0 text-xs text-gray-500 hover:underline"

@@ -224,6 +224,8 @@ export type VideoCharacter = {
 	applies_to_id: string;
 	/** Hidden while work mode (the hidePrivate setting) is on. */
 	private: boolean;
+	/** Out of the library and pickers; still works where already attached. */
+	archived: boolean;
 	/** Unix seconds. */
 	created_at: number;
 	updated_at: number;
@@ -302,6 +304,7 @@ export const updateVideoCharacter = async (
 		kind?: ReferenceKind;
 		applies_to_id?: string;
 		private?: boolean;
+		archived?: boolean;
 	}
 ): Promise<VideoCharacter> =>
 	await videoCharacterRequest(token, `/characters/${id}`, {

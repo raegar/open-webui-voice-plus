@@ -48,9 +48,13 @@
 	const isOutfit = (c: VideoCharacter) => (c.kind ?? 'character') === 'outfit';
 	// Work mode leaves private characters out of the picker, attached or not.
 	$: visibleLibrary = $settings?.hidePrivate ? library.filter((c) => !c.private) : library;
+	// Archived entries stay listed only while this chat is using them, so they can
+	// still be detached or changed but are not offered anywhere new.
+	$: inUse = new Set([...selectedIds, ...Object.values(outfitIds)]);
+	$: offered = visibleLibrary.filter((c) => !c.archived || inUse.has(c.id));
 	// Outfits are not attached on their own; each character picks one to wear.
-	$: attachable = visibleLibrary.filter((c) => !isOutfit(c));
-	$: outfits = visibleLibrary.filter(isOutfit);
+	$: attachable = offered.filter((c) => !isOutfit(c));
+	$: outfits = offered.filter(isOutfit);
 
 	// Before the first message a chat has no id, so the selection is buffered in a
 	// store and flushed by initChatHandler the moment the chat is created.
