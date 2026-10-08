@@ -347,8 +347,11 @@ async def upload_npc_portrait(
 
 @router.get("/chats/{chat_id}/scene-npcs")
 async def get_game_master_scene_npcs(
-    chat_id: str, message_id: Optional[str] = None, user=Depends(get_verified_user)
+    request: Request,
+    chat_id: str,
+    message_id: Optional[str] = None,
+    user=Depends(get_verified_user),
 ):
     """NPCs on stage at a message, with portrait file ids, for the Video Studio."""
     _chat_or_404(chat_id, user)
-    return get_scene_npcs(user.id, chat_id, message_id)
+    return await get_scene_npcs(request, user, chat_id, message_id)

@@ -222,6 +222,7 @@
 				await attachVideoCharacter(localStorage.token, chatId, character.id);
 				attachedIds = [...attachedIds, character.id];
 			}
+			characterStateVersion.update((version) => version + 1);
 		} catch (error) {
 			toast.error(`${error}`);
 		} finally {

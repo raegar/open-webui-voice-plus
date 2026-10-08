@@ -10,12 +10,14 @@
 		type GameMasterStatus
 	} from '$lib/apis/gamemaster';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
+	import { excludeAttachedNpcs } from '$lib/utils/sceneCast';
 
 	const i18n = getContext('i18n');
 
 	export let chatId: string;
 	export let state: Record<string, any> | null = null;
 	export let portraits: GameMasterPortrait[] = [];
+	export let characters: { name: string; kind?: string }[] = [];
 	export let canDraw = false;
 	export let onStatus: (status: GameMasterStatus) => void = () => {};
 
@@ -30,7 +32,10 @@
 
 	// NPCs still waiting in the wings are the GM's secret, so only the ones the story
 	// has already met appear here.
-	$: npcs = ((state?.npcs ?? []) as any[]).filter((npc) => npc?.name && npc.status !== 'planned');
+	$: npcs = excludeAttachedNpcs(
+		((state?.npcs ?? []) as any[]).filter((npc) => npc?.name && npc.status !== 'planned'),
+		characters
+	);
 	$: byId = new Map(portraits.map((portrait) => [portrait.npc_id, portrait]));
 
 	const portraitOf = (npc: any): GameMasterPortrait | null => {

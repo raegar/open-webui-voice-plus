@@ -17,6 +17,7 @@
 		type VideoCharacter
 	} from '$lib/apis/videos';
 	import {
+		characterStateVersion,
 		config,
 		gameMasterTranscript,
 		gameMasterVersion,
@@ -37,6 +38,7 @@
 	let characters: VideoCharacter[] = [];
 	let loadedChatId: string | null | undefined = undefined;
 	let seenVersion = 0;
+	let seenCharacterVersion = 0;
 	let saving = false;
 	let consulting = false;
 	let rerolling = false;
@@ -113,6 +115,11 @@
 	$: if ($gameMasterVersion !== seenVersion) {
 		seenVersion = $gameMasterVersion;
 		void refresh();
+	}
+
+	$: if ($characterStateVersion !== seenCharacterVersion) {
+		seenCharacterVersion = $characterStateVersion;
+		void loadCharacters();
 	}
 
 	onDestroy(() => {
@@ -408,6 +415,7 @@
 					{chatId}
 					state={current?.state ?? null}
 					portraits={status?.portraits ?? []}
+					{characters}
 					{canDraw}
 					onStatus={setStatus}
 				/>

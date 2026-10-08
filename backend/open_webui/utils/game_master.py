@@ -81,6 +81,9 @@ Principles:
 7. The character marked PLAYER belongs to the player. Never decide what they say, think, feel or choose, and never brief them. You do decide how the world responds to what they attempt: whether a lie lands, whether a door opens, whether a risky move succeeds or costs them.
 8. Run the world. Complications grow from what is already set up (threads, clocks, NPCs with their own business), not from coincidence. Advance a clock when the story pushes it. When a clock fills, its consequence happens.
 9. Introduce NPCs as a DM would: when they serve a thread, a clock or the player's agenda, and one new face at a time. Give each a one-line card, a want, a voice, and a fixed visual look that stays the same from scene to scene, in two to four concrete sentences: for a person, age, build, face, hair and clothing; for anything else, its form, size, texture and colour, how it moves, and what it does to the light and space around it. The look is also what their portrait is drawn from, so make it vivid and specific. To bring an NPC in, set their status to "entering": the actor is then required to bring them into the very next reply, and they move on stage automatically once that reply is written. Keep NPCs you are saving for later as "planned". Once the player has asked for someone and you have agreed, do not keep postponing: set them entering.
+   Track departures too. After an NPC leaves, or the scene moves somewhere they have not followed, explicitly update their status to "off_stage"; use "gone" for a permanent departure. Only characters physically in the current scene remain "on_stage". Being mentioned, remembered, heard remotely or important to a thread does not put them on stage. Keep their card and look for a later return, and mark them entering only when they actually return.
+   The current scene follows the PLAYER character. If the player walks out of a room, goes outside, travels, or otherwise leaves the others behind, those NPCs are now off stage even though they have not moved. Do not keep tracking their old room as the current scene or assume that they follow. Include only people explicitly accompanying the player or established at the destination. Each plan must report the current location and complete physically present NPC roster in "scene". Work this out from the latest player action and the resulting reply, not from the old on_stage labels. Someone seen earlier in this reply but left behind at its end is not currently present.
+   The attached Characters roster already defines those people. Never create an NPC duplicate of an attached character, including the PLAYER; keep their drives and stances in "characters" under their existing name. NPCs are additional people introduced by you, not extra profiles or portraits for the attached cast.
 10. Secrets. A character's own secrets can go in their briefing, because an actor must know them to play them. A twist no character knows stays with you until the story earns the reveal, though you can hint at it.
 11. Respect the player's agenda, their directives and the chat instructions. Make the story harder, never into something the player said they do not want.
 12. Pace yourself. Not every turn needs a new event. Some turns the right note is simply: hold your ground.
@@ -100,6 +103,7 @@ Your private thinking: what just happened, whether anyone caved or drifted, what
 The JSON:
 {{
   "observations": ["short findings, e.g. 'cave: Sam agreed to leave though the price was not paid', 'thread t1 advanced'"],
+  "scene": {{ "location": "the PLAYER's current location at the end of the latest exchange", "npc_ids": ["ids of every NPC physically there with the PLAYER now, or an empty list when none"] }},
   "update": {{
     "premise": "one paragraph: what this story is about underneath",
     "characters": {{
@@ -122,6 +126,7 @@ The JSON:
 }}
 
 "update" holds only what changes. Anything you leave out stays as it is. List items are matched by id: an existing id updates that item, a new id adds one. Use short ids such as n1, t2, c3, s4. A character's stance issue set to null is dropped.
+"scene" is a complete current snapshot, not a patch. Always supply it, even if the location has not changed. Use exact ids from the existing NPCs or NPCs added in this plan. NPCs left behind must be omitted from scene.npc_ids; this automatically marks them off_stage without erasing their card or portrait. Retain silent NPCs who are still physically there. Exclude merely remembered or remote people and NPCs you plan to introduce in the NEXT reply (status entering), since they have not arrived yet. Do not move the player to a location you intend for the future.
 
 Writing the note:
 - Address each character who matters to the next reply by name, in the second person: what you want right now, what you will do if the player pulls you another way, and what it would take to change your mind.
@@ -167,15 +172,21 @@ TALK_PLAN_TASK = (
 # Restated last, where the model reads it most recently: some models write their
 # reasoning as prose and stop without the plan.
 SHAPE_REMINDER = (
+    "Include scene with the PLAYER's current location and the complete npc_ids "
+    "roster there now. People left in the previous room are absent unless they "
+    "actually followed; planned arrivals are not present yet. "
     "Reply in the required shape: <gm_reasoning>...</gm_reasoning>, then <gm_plan> "
     "with the JSON object. The plan is required: without it nothing you decide "
     "reaches the story."
 )
 # Sent once when a reply has no readable plan, continuing from the GM's own reasoning.
 REPAIR_PROMPT = (
-    "Your reply stopped before the plan, so none of it can reach the story yet. Reply "
+    "Your reply did not supply a complete usable plan. Reply "
     "now with only the <gm_plan> block: the JSON object from your instructions "
-    "(observations, update, remove, note), following the reasoning you just wrote. "
+    "(observations, scene, update, remove, note), following the reasoning you just wrote. "
+    "Include scene.location and scene.npc_ids: the complete roster physically with "
+    "the PLAYER now, after any move or departure, not people left behind or planned "
+    "to arrive next. Use only existing NPC ids or ids added in this plan. "
     "No other text."
 )
 
@@ -199,7 +210,9 @@ NOTES_HEADER = (
     "these notes, and never reveal a secret before the story earns it. The player's "
     "in-character protests and suggestions are part of the scene: characters react to "
     "them as themselves, and hold to this direction unless the story gives them a "
-    "real reason to change."
+    "real reason to change. NPC presence describes the previous exchange: if the "
+    "player now leaves the location, keep anyone left behind out of the new scene. "
+    "Do not assume they follow or relocate them just because their card is listed."
 )
 
 
@@ -305,7 +318,8 @@ def apply_plan(state: Optional[dict], plan: dict) -> dict:
     """Apply a GM plan's update and remove sections to a copy of the state.
 
     A patch, never a rewrite: whatever the plan leaves out survives, so a truncated
-    or partial reply cannot wipe the campaign.
+    or partial reply cannot wipe the campaign. The scene roster is a complete
+    snapshot that reconciles presence, while retaining every NPC's other details.
     """
     result = copy.deepcopy(state) if isinstance(state, dict) else {}
     update = plan.get("update") if isinstance(plan.get("update"), dict) else {}
@@ -378,6 +392,16 @@ def apply_plan(state: Optional[dict], plan: dict) -> dict:
         if npc.get("status") not in NPC_STATUSES:
             npc["status"] = "planned"
 
+    snapshot = validated_scene_snapshot(plan.get("scene"), result.get("npcs", []))
+    if snapshot is not None:
+        present = set(snapshot["npc_ids"])
+        for npc in result.get("npcs", []):
+            if npc.get("status") == "on_stage" and npc.get("id") not in present:
+                npc["status"] = "off_stage"
+            elif npc.get("status") in ("planned", "entering", "off_stage") and npc.get("id") in present:
+                npc["status"] = "on_stage"
+        result["scene"] = snapshot
+
     directives = [d for d in result.get("player_directives", []) if isinstance(d, str)]
     for directive in update.get("player_directives") or []:
         directive = _text(directive)
@@ -403,6 +427,26 @@ def apply_plan(state: Optional[dict], plan: dict) -> dict:
             result["tension"] = merged
 
     return result
+
+
+def validated_scene_snapshot(snapshot: Any, npcs: list[dict]) -> Optional[dict]:
+    """Reject incomplete snapshots rather than clearing the cast by accident."""
+    if not isinstance(snapshot, dict) or not _text(snapshot.get("location")):
+        return None
+    ids = snapshot.get("npc_ids")
+    if not isinstance(ids, list) or any(not isinstance(npc_id, str) for npc_id in ids):
+        return None
+    known = {npc.get("id") for npc in npcs}
+    if any(npc_id not in known for npc_id in ids):
+        return None
+    return {"location": _clip(snapshot["location"].strip()), "npc_ids": list(dict.fromkeys(ids))}
+
+
+def plan_needs_repair(state: Optional[dict], plan: Optional[dict]) -> bool:
+    if plan is None:
+        return True
+    npcs = apply_plan(state, plan).get("npcs", [])
+    return bool(npcs) and validated_scene_snapshot(plan.get("scene"), npcs) is None
 
 
 def _json_candidates(raw: str) -> list[str]:
@@ -628,14 +672,19 @@ def npcs_needing_portraits(state: Optional[dict], portraits: dict) -> list[dict]
     return needed
 
 
-def scene_npcs(state: Optional[dict], portraits: dict) -> list[dict]:
+def scene_npcs(
+    state: Optional[dict], portraits: dict, *, include_departed: bool = False
+) -> list[dict]:
     """The NPCs in the scene, with a ready portrait's file id where there is one.
 
-    portraits maps npc id to {"name", "status", "file_id"}.
+    portraits maps npc id to {"name", "status", "file_id"}. include_departed
+    supplies candidates for checking a written scene: someone can leave during
+    that scene, so their after-the-reply status alone cannot decide the cast.
     """
     scene = []
+    statuses = (*PRESENT_STATUSES, "off_stage", "gone") if include_departed else PRESENT_STATUSES
     for npc in (state or {}).get("npcs", []):
-        if not isinstance(npc, dict) or npc.get("status") not in PRESENT_STATUSES:
+        if not isinstance(npc, dict) or npc.get("status") not in statuses:
             continue
         name = _text(npc.get("name"))
         if not name:
@@ -696,6 +745,22 @@ def _profile(character: Any, key: str) -> str:
         character.get(key, "") if isinstance(character, dict) else getattr(character, key, "")
     )
     return value.strip() if isinstance(value, str) else ""
+
+
+def exclude_attached_npcs(npcs: list[dict], characters: list) -> list[dict]:
+    """An attached person's profile takes precedence over a GM copy of them."""
+    seen = {
+        _profile(character, "name").lower()
+        for character in characters
+        if (_profile(character, "kind") or "character") == "character"
+    }
+    result = []
+    for npc in npcs:
+        name = _profile(npc, "name").lower()
+        if name and name not in seen:
+            seen.add(name)
+            result.append(npc)
+    return result
 
 
 def _outfit_text(character: Any) -> str:
@@ -1157,8 +1222,8 @@ async def run_gm_pass(
                 )
                 content, model_reasoning, tokens = _reply_parts(response)
                 reasoning, plan = parse_gm_reply(content)
-                if plan is None:
-                    # One repair turn: ask for just the plan, after its own reasoning.
+                if plan_needs_repair(state, plan):
+                    # One repair turn also covers a missing complete scene roster.
                     response = await generate_chat_completion(
                         request,
                         form_data={
@@ -1177,7 +1242,7 @@ async def run_gm_pass(
                     if repair_reasoning:
                         model_reasoning = (model_reasoning + "\n\n" + repair_reasoning).strip()
                     _, plan = parse_gm_reply(repair)
-                    if plan is not None:
+                    if not plan_needs_repair(state, plan):
                         log.info("GM plan recovered by a repair turn for chat %s", chat_id)
                 duration_ms = int((time.monotonic() - started) * 1000)
                 common = {
@@ -1190,13 +1255,13 @@ async def run_gm_pass(
                     "duration_ms": duration_ms,
                 }
 
-                if plan is None:
+                if plan_needs_repair(state, plan):
                     GameMaster.add_entry(
                         user.id,
                         chat_id,
                         **common,
                         reasoning=reasoning or content,
-                        error="The GM's reply had no readable plan, so nothing was changed.",
+                        error="The GM's reply had no complete readable plan with a current scene roster, so nothing was changed.",
                     )
                     await emit({"status": "error"})
                     return None
@@ -1206,7 +1271,7 @@ async def run_gm_pass(
                 observations = [
                     _clip(o, 500) for o in plan.get("observations") or [] if isinstance(o, str)
                 ][:20]
-                patch = {k: plan[k] for k in ("update", "remove") if k in plan}
+                patch = {k: plan[k] for k in ("update", "remove", "scene") if k in plan}
                 patch["changes"] = describe_changes(before, new_state)
                 entry = GameMaster.add_entry(
                     user.id,
@@ -1582,31 +1647,51 @@ async def queue_missing_portraits(
 ) -> None:
     """Portraits for NPCs who have just come into the scene. Never raises."""
     from open_webui.models.game_master import GameMaster
+    from open_webui.models.video_characters import VideoCharacters
 
     try:
         drawn = {p.npc_id: p.name for p in GameMaster.get_portraits(user.id, chat_id)}
-        for npc in npcs_needing_portraits(state, drawn):
+        characters = VideoCharacters.get_for_chat(user.id, chat_id)
+        for npc in exclude_attached_npcs(npcs_needing_portraits(state, drawn), characters):
             if not await queue_npc_portrait(request, user, chat_id, npc, model_id=model_id):
                 return
     except Exception:
         log.exception("Could not queue NPC portraits for chat %s", chat_id)
 
 
-def get_scene_npcs(user_id: str, chat_id: str, message_id: Optional[str]) -> list[dict]:
-    """NPCs on stage at message_id, with their portraits, for the Video Studio."""
+async def get_scene_npcs(
+    request: Any, user: Any, chat_id: str, message_id: Optional[str]
+) -> list[dict]:
+    """NPCs actually depicted at message_id, with portraits, for the Video Studio.
+
+    The plan is for the next reply and may be stale between GM passes. Verify its
+    cast against the selected reply rather than sending every remembered portrait.
+    This is read-only: rendering an old scene never changes the current GM plan.
+    """
     from open_webui.models.chats import Chats
     from open_webui.models.game_master import GameMaster
+    from open_webui.models.video_characters import VideoCharacters
+    from open_webui.utils.misc import get_message_list
+    from open_webui.utils.videos.scene_cast import filter_scene_npcs
 
-    index = GameMaster.get_entry_index(user_id, chat_id)
+    index = GameMaster.get_entry_index(user.id, chat_id)
     if not index:
         return []
     messages_map = Chats.get_messages_map_by_chat_id(chat_id)
+    if not message_id or message_id not in (messages_map or {}):
+        return []
+    conversation = get_message_list(messages_map, message_id)
     entry_id = find_state_entry_id(index, messages_map, message_id, inclusive=True)
-    entry = GameMaster.get_entry(user_id, entry_id) if entry_id else None
+    entry = GameMaster.get_entry(user.id, entry_id) if entry_id else None
     if not entry:
         return []
     portraits = {
         p.npc_id: {"name": p.name, "status": p.status, "file_id": p.file_id}
-        for p in GameMaster.get_portraits(user_id, chat_id)
+        for p in GameMaster.get_portraits(user.id, chat_id)
     }
-    return scene_npcs(entry.state, portraits)
+    candidates = exclude_attached_npcs(
+        scene_npcs(entry.state, portraits, include_departed=True),
+        VideoCharacters.get_for_chat(user.id, chat_id),
+    )
+    model_id = messages_map[message_id].get("model") or entry.model
+    return await filter_scene_npcs(request, user, model_id, candidates, conversation)

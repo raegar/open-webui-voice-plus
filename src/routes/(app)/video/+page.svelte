@@ -4,6 +4,7 @@
 	import { toast } from 'svelte-sonner';
 
 	import { generateOpenAIChatCompletion } from '$lib/apis/openai';
+	import { excludeAttachedNpcs } from '$lib/utils/sceneCast';
 	import { deleteFileById } from '$lib/apis/files';
 	import {
 		cancelVideoGenerationJob,
@@ -668,7 +669,10 @@ This is far too short to tell the whole scene, so do not try. Edit the creative 
 		const ordered = [
 			...roster.filter((e) => kindOf(e) === 'character'),
 			...roster.filter((e) => kindOf(e) !== 'character' && kindOf(e) !== 'npc'),
-			...roster.filter((e) => kindOf(e) === 'npc')
+			...excludeAttachedNpcs(
+				roster.filter((e) => kindOf(e) === 'npc'),
+				roster
+			)
 		];
 
 		for (const entry of ordered) {
