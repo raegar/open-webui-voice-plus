@@ -13,7 +13,11 @@ export type VideoGenerationOptions = {
 	first_frame_data_url?: string;
 	last_frame_data_url?: string;
 	reference_image_data_urls?: string[];
+	// Ordered like <Picture N>. A file id reuses a picture the server already holds,
+	// so only new or swapped pictures are uploaded.
+	reference_images?: Array<{ file_id: string } | { data_url: string }>;
 	reference_audio_data_urls?: string[];
+	reference_audio_file_ids?: string[];
 	motion_lora?: boolean;
 	motion_lora_variant?: 'hmmotion' | 'm3_unlocked';
 	// Look LoRA in its own slot; combines with motion and turbo.

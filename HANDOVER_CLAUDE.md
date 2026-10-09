@@ -141,7 +141,7 @@ Generation:
 POST /api/v1/videos/generations
 ```
 
-Form fields include `prompt`, `mode` (`text` or `reference`), `aspect_ratio`, `megapixels` (`0.2` or `0.4`), `duration` (`3`, `5`, `10`, or `15`), `seed`, optional `first_frame_data_url`, optional `last_frame_data_url`, ordered `reference_image_data_urls`, and optional chat/message IDs. First-frame and first/last-frame workflows use `mode=text` and are inferred from the supplied frame fields.
+Form fields include `prompt`, `mode` (`text` or `reference`), `aspect_ratio`, `megapixels` (`0.2` or `0.4`), `duration` (`3`, `5`, `10`, or `15`), `seed`, optional `first_frame_data_url`, optional `last_frame_data_url`, ordered `reference_image_data_urls` (or ordered `reference_images`, each `{file_id}` for a picture already on the server or `{data_url}` for a fresh one, which the studio uses so library pictures are not re-uploaded), voice references as `reference_audio_data_urls` or `reference_audio_file_ids`, and optional chat/message IDs. First-frame and first/last-frame workflows use `mode=text` and are inferred from the supplied frame fields.
 
 Image data URLs are validated as PNG/JPEG/WebP and capped at 25 MB. A last frame requires a first frame. Raw data URLs are never written to generation metadata. Stored metadata includes prompt, mode, dimensions/settings, seed, frame-presence flags, and ownership.
 

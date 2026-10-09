@@ -49,6 +49,9 @@
 		// Which roster entry this slot stands for, when it came from one. Kept when the
 		// picture is swapped, because the slot still means that character in the brief.
 		origin?: string;
+		// Set when the picture is a file already on the server, so submitting sends the
+		// id rather than uploading it again. A swapped picture has none.
+		fileId?: string;
 	};
 	type GeneratedVideo = {
 		url: string;
@@ -201,7 +204,7 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 	let sceneCharacters: string | null = null;
 	// Names of the people in the handed-over cast, for the POV subject picker.
 	let sceneCastNames: string[] = [];
-	// Voice reference data URLs, in the same order as the <Audio N> labels.
+	// Voice reference file ids, in the same order as the <Audio N> labels.
 	let sceneVoices: string[] = [];
 	let capturingFrame = false;
 	let scrollContainer: HTMLDivElement;
@@ -682,7 +685,7 @@ This is far too short to tell the whole scene, so do not try. Edit the creative 
 				if (images.length >= 9) break;
 				try {
 					const frame = await loadFrameFromFile(fileId, entry?.name ?? 'reference');
-					images.push({ ...frame, origin: entry?.name });
+					images.push({ ...frame, origin: entry?.name, fileId });
 					indices.push(images.length);
 				} catch (error) {
 					console.error(error);
@@ -718,14 +721,10 @@ This is far too short to tell the whole scene, so do not try. Edit the creative 
 			} else {
 				// A voice only earns an <Audio N> label if the character is actually shown.
 				let audioLabel = '';
+				// The server reads the voice by id, so it is never downloaded here.
 				if (entry?.voiceFileId && voices.length < MAX_REFERENCE_AUDIOS) {
-					try {
-						const voice = await loadFrameFromFile(entry.voiceFileId, 'voice');
-						voices.push(voice.dataUrl);
-						audioLabel = ` Their speaking voice is <Audio ${voices.length}>.`;
-					} catch (error) {
-						console.error(error);
-					}
+					voices.push(entry.voiceFileId);
+					audioLabel = ` Their speaking voice is <Audio ${voices.length}>.`;
 				}
 				// Clothing is layered: a chosen outfit replaces the clothing in the library
 				// description, and present state overrides both, since it records what has
@@ -1330,7 +1329,7 @@ Write the final MiniMax H3 production brief now.`
 		// Tolerate a malformed roster rather than throwing inside the prepare step.
 		const attachedVoices = Array.isArray(sceneVoices) ? sceneVoices : [];
 		const hasDialogue = promptHasDialogue(productionPrompt);
-		const voiceUrls = hasDialogue ? attachedVoices : [];
+		const voiceFileIds = hasDialogue ? attachedVoices : [];
 		// Send a brief that cannot ask for speech it never specifies.
 		const outboundPrompt = hasDialogue
 			? productionPrompt.trim()
@@ -1361,8 +1360,11 @@ Write the final MiniMax H3 production brief now.`
 					: {}),
 				...(workflowMode === 'reference'
 					? {
-							reference_image_data_urls: referenceImages.map((image) => image.dataUrl),
-							...(voiceUrls.length > 0 ? { reference_audio_data_urls: voiceUrls } : {})
+							// Library pictures go by id; only uploaded or swapped ones travel.
+							reference_images: referenceImages.map((image) =>
+								image.fileId ? { file_id: image.fileId } : { data_url: image.dataUrl }
+							),
+							...(voiceFileIds.length > 0 ? { reference_audio_file_ids: voiceFileIds } : {})
 						}
 					: {}),
 				...(workflowMode === 'first-last' && lastFrame

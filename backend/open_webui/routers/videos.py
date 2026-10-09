@@ -6,6 +6,7 @@ import logging
 import mimetypes
 import random
 import time
+from pathlib import Path
 from typing import Literal, Optional
 from uuid import UUID, uuid4
 
@@ -21,6 +22,7 @@ from open_webui.models.video_characters import (
     VideoCharacters,
 )
 from open_webui.routers.files import upload_file_handler
+from open_webui.storage.provider import Storage
 from open_webui.utils.access_control import has_permission
 from open_webui.utils.auth import get_verified_user
 from open_webui.utils.videos.comfyui import ComfyUIVideoClient
@@ -42,13 +44,29 @@ VIDEO_JOB_DONE_STATES = {"completed", "failed", "cancelled"}
 VIDEO_JOB_ACTIVE_STATES = {"queued", "running"}
 
 
+class ReferenceImageSource(BaseModel):
+    """One reference slot: a file already on the server, or a fresh upload.
+
+    Library pictures go by file id so a phone on a weak signal does not have to
+    send back megabytes of images the server already holds.
+    """
+
+    file_id: Optional[str] = Field(default=None, max_length=64)
+    data_url: Optional[str] = Field(default=None, max_length=36_000_000)
+
+
 class CreateVideoForm(BaseModel):
     prompt: str
     mode: Literal["text", "reference"] = "text"
     first_frame_data_url: Optional[str] = Field(default=None, max_length=36_000_000)
     last_frame_data_url: Optional[str] = Field(default=None, max_length=36_000_000)
     reference_image_data_urls: list[str] = Field(default_factory=list, max_length=9)
+    # Ordered like <Picture N>; takes the place of reference_image_data_urls.
+    reference_images: list[ReferenceImageSource] = Field(
+        default_factory=list, max_length=9
+    )
     reference_audio_data_urls: list[str] = Field(default_factory=list, max_length=3)
+    reference_audio_file_ids: list[str] = Field(default_factory=list, max_length=3)
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "9:16"
     megapixels: Literal[0.2, 0.4] = 0.2
     duration: Literal[3, 5, 10, 15] = 3
@@ -110,6 +128,21 @@ def _resolve_regeneration_prompt(form_data: CreateVideoForm, user) -> Optional[s
     return _get_text_content(message.get("content")) or None
 
 
+IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+
+def _frame_from_bytes(
+    image_data: bytes, content_type: str, role: str
+) -> tuple[bytes, str, str]:
+    if not image_data or len(image_data) > 25 * 1024 * 1024:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{role} must be no larger than 25 MB",
+        )
+    extension = mimetypes.guess_extension(content_type) or ".png"
+    return image_data, f"{role.lower().replace(' ', '-')}{extension}", content_type
+
+
 def _load_frame_data_url(value: str, role: str) -> tuple[bytes, str, str]:
     if len(value) > 36_000_000:
         raise HTTPException(
@@ -119,11 +152,7 @@ def _load_frame_data_url(value: str, role: str) -> tuple[bytes, str, str]:
     try:
         header, encoded = value.split(",", 1)
         content_type = header.removeprefix("data:").split(";", 1)[0].lower()
-        if not header.endswith(";base64") or content_type not in {
-            "image/jpeg",
-            "image/png",
-            "image/webp",
-        }:
+        if not header.endswith(";base64") or content_type not in IMAGE_CONTENT_TYPES:
             raise ValueError
         image_data = base64.b64decode(encoded, validate=True)
     except (ValueError, binascii.Error) as exc:
@@ -131,14 +160,77 @@ def _load_frame_data_url(value: str, role: str) -> tuple[bytes, str, str]:
             status_code=400,
             detail=f"{role} must be a base64 PNG, JPEG, or WebP image",
         ) from exc
+    return _frame_from_bytes(image_data, content_type, role)
 
-    if not image_data or len(image_data) > 25 * 1024 * 1024:
+
+def _owned_file(user, file_id: str, role: str):
+    file_item = Files.get_file_by_id(file_id)
+    if not file_item or file_item.user_id != user.id:
+        raise HTTPException(status_code=400, detail=f"{role} could not be found")
+    return file_item
+
+
+def _read_owned_file(user, file_id: str, role: str) -> tuple[bytes, str]:
+    """Bytes and content type of a file the caller uploaded earlier."""
+    file_item = _owned_file(user, file_id, role)
+    meta = file_item.meta if isinstance(file_item.meta, dict) else {}
+    # By extension first, as the file content route serves it, which is what the
+    # studio used to read and upload back.
+    content_type = (
+        mimetypes.guess_type(file_item.filename or "")[0]
+        or meta.get("content_type")
+        or ""
+    ).split(";", 1)[0].strip().lower()
+    try:
+        data = Path(Storage.get_file(file_item.path)).read_bytes()
+    except Exception as exc:
+        log.exception("Could not read file %s for %s", file_id, role)
+        raise HTTPException(
+            status_code=400, detail=f"{role} could not be read"
+        ) from exc
+    return data, content_type
+
+
+def _load_frame_file(user, file_id: str, role: str) -> tuple[bytes, str, str]:
+    data, content_type = _read_owned_file(user, file_id, role)
+    if content_type == "image/jpg":
+        content_type = "image/jpeg"
+    if content_type not in IMAGE_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=400, detail=f"{role} must be a PNG, JPEG, or WebP image"
+        )
+    return _frame_from_bytes(data, content_type, role)
+
+
+def _reference_image_sources(form_data: "CreateVideoForm") -> list[ReferenceImageSource]:
+    """The ordered reference slots, from whichever field the caller used."""
+    if form_data.reference_images and form_data.reference_image_data_urls:
         raise HTTPException(
             status_code=400,
-            detail=f"{role} must be no larger than 25 MB",
+            detail="Send reference_images or reference_image_data_urls, not both",
         )
-    extension = mimetypes.guess_extension(content_type) or ".png"
-    return image_data, f"{role.lower().replace(' ', '-')}{extension}", content_type
+    sources = form_data.reference_images or [
+        ReferenceImageSource(data_url=value)
+        for value in form_data.reference_image_data_urls
+    ]
+    for index, source in enumerate(sources):
+        if bool(source.file_id) == bool(source.data_url):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Reference image {index + 1} needs a file id or an image, not both",
+            )
+    return sources
+
+
+def _check_reference_files(form_data: "CreateVideoForm", user) -> None:
+    """Fail at submission, not minutes later in the queue, on a bad file id."""
+    for index, source in enumerate(_reference_image_sources(form_data)):
+        if source.file_id:
+            _owned_file(user, source.file_id, f"Reference image {index + 1}")
+    if len(form_data.reference_audio_data_urls) + len(form_data.reference_audio_file_ids) > 3:
+        raise HTTPException(status_code=400, detail="At most 3 voice references")
+    for index, file_id in enumerate(form_data.reference_audio_file_ids):
+        _owned_file(user, file_id, f"Voice reference {index + 1}")
 
 
 AUDIO_CONTENT_TYPES = {
@@ -171,6 +263,22 @@ def _load_audio_data_url(value: str, index: int) -> tuple[bytes, str, str]:
             status_code=400,
             detail="Voice reference must be a base64 WAV, MP3, M4A, OGG, FLAC, or WebM file",
         ) from exc
+    return _audio_from_bytes(audio_data, content_type, index)
+
+
+def _load_audio_file(user, file_id: str, index: int) -> tuple[bytes, str, str]:
+    audio_data, content_type = _read_owned_file(user, file_id, f"Voice reference {index}")
+    if content_type not in AUDIO_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="Voice reference must be a WAV, MP3, M4A, OGG, FLAC, or WebM file",
+        )
+    return _audio_from_bytes(audio_data, content_type, index)
+
+
+def _audio_from_bytes(
+    audio_data: bytes, content_type: str, index: int
+) -> tuple[bytes, str, str]:
     if not audio_data or len(audio_data) > 25 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Voice reference must be under 25 MB")
     extension = mimetypes.guess_extension(content_type) or ".wav"
@@ -451,8 +559,10 @@ async def video_generations(
         if form_data.seed is not None
         else random.randrange(NUMBER_SAFE_INTEGER_MAX + 1)
     )
+    reference_sources = _reference_image_sources(form_data)
+    _check_reference_files(form_data, user)
     if form_data.mode == "reference" and (
-        not form_data.reference_image_data_urls
+        not reference_sources
         or form_data.first_frame_data_url
         or form_data.last_frame_data_url
     ):
@@ -460,7 +570,7 @@ async def video_generations(
             status_code=400,
             detail="Reference mode requires 1-9 reference images and cannot use frame anchors",
         )
-    if form_data.mode != "reference" and form_data.reference_image_data_urls:
+    if form_data.mode != "reference" and reference_sources:
         raise HTTPException(
             status_code=400,
             detail="Reference images require Reference-to-Video mode",
@@ -481,12 +591,20 @@ async def video_generations(
         else None
     )
     reference_images = [
-        _load_frame_data_url(value, f"Reference image {index + 1}")
-        for index, value in enumerate(form_data.reference_image_data_urls)
+        (
+            _load_frame_file(user, source.file_id, f"Reference image {index + 1}")
+            if source.file_id
+            else _load_frame_data_url(source.data_url, f"Reference image {index + 1}")
+        )
+        for index, source in enumerate(reference_sources)
     ]
     reference_audios = [
         _load_audio_data_url(value, index + 1)
         for index, value in enumerate(form_data.reference_audio_data_urls)
+    ]
+    reference_audios += [
+        _load_audio_file(user, file_id, len(reference_audios) + index + 1)
+        for index, file_id in enumerate(form_data.reference_audio_file_ids)
     ]
     client = ComfyUIVideoClient(
         request.app.state.config.COMFYUI_VIDEO_BASE_URL,
@@ -517,7 +635,9 @@ async def video_generations(
                 "first_frame_data_url",
                 "last_frame_data_url",
                 "reference_image_data_urls",
+                "reference_images",
                 "reference_audio_data_urls",
+                "reference_audio_file_ids",
             },
             exclude_none=True,
         ),
@@ -750,6 +870,7 @@ async def create_video_generation_job(
     generation_form = CreateVideoForm.model_validate(
         form_data.model_dump(exclude={"job_id"})
     )
+    _check_reference_files(generation_form, user)
     VIDEO_GENERATION_JOBS[job_id] = {
         "user_id": user.id,
         "status": "queued",
