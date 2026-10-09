@@ -21,6 +21,8 @@
 		gameMasterVersion,
 		gameMasterIndex,
 		gameMasterTalkRequest,
+		gameMasterStartRequest,
+		gameMasterStarting,
 		pendingGameMaster,
 		hiddenChatIds,
 		chats,
@@ -115,7 +117,7 @@
 	import { getBanners } from '$lib/apis/configs';
 	import { attachVideoCharacter } from '$lib/apis/videos';
 	import { syncCharacterState } from '$lib/utils/characterState';
-	import { getGameMasterIndex, updateGameMaster } from '$lib/apis/gamemaster';
+	import { getGameMasterIndex, openGameMasterStory, updateGameMaster } from '$lib/apis/gamemaster';
 	import GameMasterTranscript from '$lib/components/chat/Controls/GameMasterTranscript.svelte';
 
 	export let chatIdProp = '';
@@ -1211,6 +1213,7 @@
 		await chatTitle.set('');
 		pendingChatCharacterIds.set([]);
 		pendingGameMaster.set(null);
+		openedChatId = '';
 
 		history = {
 			messages: {},
@@ -2028,8 +2031,13 @@
 		}
 		history = history;
 
-		// Create new chat if newChat is true and first user message
-		if (newChat && _history.messages[_history.currentId].parentId === null) {
+		// Create new chat if newChat is true and first user message. A chat the Game
+		// Master opened already exists, empty, so its first message must not make another.
+		if (
+			newChat &&
+			_history.messages[_history.currentId].parentId === null &&
+			!(openedChatId && openedChatId === _chatId)
+		) {
 			_chatId = await initChatHandler(_history);
 		}
 
@@ -2687,6 +2695,48 @@
 
 	// "/gm ..." talks to the Game Master out of character instead of sending a message.
 	// It never enters the conversation; the Game Master panel sends it and shows the answer.
+	// Start the story: the GM opens a new chat instead of the player setting the scene.
+	// The chat is created empty with its characters and GM settings, the GM plans
+	// session zero and writes an opening scene card, and that card goes out as the
+	// first message, so the first reply already follows the GM's direction.
+	let openedChatId = '';
+	// The store outlives this component; only a request made from now on counts.
+	let seenStartRequest = get(gameMasterStartRequest);
+	$: if ($gameMasterStartRequest !== seenStartRequest) {
+		seenStartRequest = $gameMasterStartRequest;
+		void startStory();
+	}
+
+	const startStory = async () => {
+		if ($chatId || history?.currentId) {
+			toast.error($i18n.t('This chat has already started.'));
+			return;
+		}
+		if ($temporaryChatEnabled) {
+			toast.error($i18n.t('The Game Master needs a saved chat, not a temporary one.'));
+			return;
+		}
+		if (!get(pendingGameMaster)?.enabled) {
+			toast.error($i18n.t('Switch on the Game Master first.'));
+			return;
+		}
+		if (selectedModels.length === 0 || selectedModels.includes('')) {
+			toast.error($i18n.t('Model not selected'));
+			return;
+		}
+		gameMasterStarting.set(true);
+		try {
+			const id = await initChatHandler({ messages: {}, currentId: null });
+			openedChatId = id;
+			const { scene } = await openGameMasterStory(localStorage.token, id, selectedModels[0]);
+			await submitPrompt(scene);
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			gameMasterStarting.set(false);
+		}
+	};
+
 	const sendToGameMaster = async (text: string): Promise<boolean> => {
 		const id = $chatId;
 		if (!id || id.startsWith('local:') || !$gameMasterIndex?.enabled) {

@@ -143,6 +143,26 @@ SETUP_TASK = (
     "a clock or two, any secrets, the NPCs you intend to bring in (status planned), "
     "and the first note."
 )
+# Session zero on an empty chat: the GM opens the story rather than waiting for the
+# player to set the scene, so the first reply already follows its plan.
+OPENING_TASK = (
+    "The story has not started: nobody has written anything yet. You open it.\n"
+    "1. Choose the opening: where and when it begins, who is there, and the situation "
+    "that puts pressure on someone straight away. Build it from the characters' drives, "
+    "the setting and the player's agenda.\n"
+    "2. Add \"opening\" to the plan JSON: the scene card the player reads as the very "
+    "first message. Two to four sentences of present-tense narration that place the "
+    "PLAYER character in the scene: where they are, who is with them, what is "
+    "happening. Concrete and atmospheric, no secrets, no headings. Never decide what "
+    "the PLAYER character says, thinks, feels or does next.\n"
+    "3. Write the note as direction for the story's first reply, which follows that "
+    "card: it brings the scene to life, puts the present characters into motion on "
+    "their own drives, and ends on a moment that invites the player to act."
+)
+OPENING_REPAIR = (
+    " The story has not started yet, so the plan must also include \"opening\": the two "
+    "to four sentence scene card the player reads as the first message."
+)
 TURN_TASK = (
     "Review the latest reply against your plan. Did anyone cave, drift out of "
     "character or let tension drain away? Did the player attempt something the "
@@ -324,6 +344,10 @@ def apply_plan(state: Optional[dict], plan: dict) -> dict:
     result = copy.deepcopy(state) if isinstance(state, dict) else {}
     update = plan.get("update") if isinstance(plan.get("update"), dict) else {}
     remove = plan.get("remove") if isinstance(plan.get("remove"), dict) else {}
+
+    # The scene card that opened the story, kept so the opening can be posted.
+    if _text(plan.get("opening")):
+        result["opening"] = _clip(plan["opening"].strip())
 
     if _text(update.get("premise")):
         result["premise"] = _clip(update["premise"].strip())
@@ -882,6 +906,8 @@ def build_gm_messages(
             tasks.append(SETUP_TASK)
     elif not state:
         tasks.append(SETUP_TASK)
+        if is_opening(state, conversation):
+            tasks.append(OPENING_TASK)
     elif kind == "consult":
         tasks.append(CONSULT_TASK)
     else:
@@ -947,12 +973,19 @@ def clean_talk_reply(raw: str) -> str:
     return text.strip()
 
 
-def build_repair_messages(gm_messages: list[dict], reply: str) -> list[dict]:
+def is_opening(state: Optional[dict], conversation: list[dict]) -> bool:
+    """Session zero on a chat with nothing in it yet: the GM writes the opening."""
+    return not state and not any(message_text(m) for m in conversation)
+
+
+def build_repair_messages(
+    gm_messages: list[dict], reply: str, needs_opening: bool = False
+) -> list[dict]:
     """The pass's messages, its planless reply, and a request for only the plan."""
     return [
         *gm_messages,
         {"role": "assistant", "content": reply},
-        {"role": "user", "content": REPAIR_PROMPT},
+        {"role": "user", "content": REPAIR_PROMPT + (OPENING_REPAIR if needs_opening else "")},
     ]
 
 
@@ -1054,6 +1087,95 @@ def _lock(chat_id: str) -> asyncio.Lock:
     if lock is None:
         lock = _locks[chat_id] = asyncio.Lock()
     return lock
+
+
+# How long a chat's first reply waits for the GM's first plan before going ahead
+# without direction. A plan takes up to about a minute on slower models.
+FIRST_PLAN_WAIT_SECONDS = 150
+
+
+async def wait_for_first_plan(
+    user_id: str, chat_id: str, event_emitter: Optional[Callable] = None
+) -> None:
+    """Hold a chat's first reply until the GM's first plan exists.
+
+    Session zero starts when the chat is created, which is when the first message is
+    sent, so the first reply used to race it and went out with no direction. Waits
+    only while the GM is on, has no plan at all yet and is busy making one. Never
+    raises: on timeout the reply simply goes ahead.
+    """
+    from open_webui.models.game_master import GameMaster
+
+    try:
+        if not is_running(chat_id):
+            return
+        session = GameMaster.get_session(user_id, chat_id)
+        if not session or not session.enabled:
+            return
+        if any(entry["has_state"] for entry in GameMaster.get_entry_index(user_id, chat_id)):
+            return
+        if event_emitter:
+            await event_emitter(
+                {
+                    "type": "status",
+                    "data": {"description": "The Game Master is setting the scene", "done": False},
+                }
+            )
+
+        async def plan_finished() -> None:
+            # Passes hold the chat's lock, so acquiring it means they are done.
+            async with _lock(chat_id):
+                return
+
+        try:
+            await asyncio.wait_for(plan_finished(), FIRST_PLAN_WAIT_SECONDS)
+        except asyncio.TimeoutError:
+            log.warning("First reply for chat %s stopped waiting for the GM's plan", chat_id)
+        if event_emitter:
+            await event_emitter(
+                {
+                    "type": "status",
+                    "data": {"description": "The Game Master is setting the scene", "done": True},
+                }
+            )
+    except Exception:
+        log.exception("Could not wait for the GM's first plan for chat %s", chat_id)
+
+
+async def open_story(
+    request: Any, user: Any, chat_id: str, model_id: str
+) -> Optional[str]:
+    """Session zero for an empty chat, returning the GM's opening scene card.
+
+    Waits for a session zero already under way (switching the GM on starts one),
+    and runs one if there is none. Returns None if the GM produced no opening.
+    """
+    from open_webui.models.game_master import GameMaster
+
+    def opening() -> Optional[str]:
+        root = [
+            entry
+            for entry in GameMaster.get_entry_index(user.id, chat_id)
+            if entry["has_state"] and not entry["message_id"]
+        ]
+        if not root:
+            return None
+        entry = GameMaster.get_entry(user.id, root[-1]["id"])
+        if not entry:
+            return None
+        return _text((entry.state or {}).get("opening")) or None
+
+    if is_running(chat_id):
+        async with _lock(chat_id):
+            pass
+    text = opening()
+    if text is None:
+        # No session zero yet, or one that wrote no opening card: plan it afresh.
+        await run_gm_pass(
+            request, user, chat_id, None, model_id, kind="setup", prior_override=None
+        )
+        text = opening()
+    return text
 
 
 def get_director_notes(user_id: str, chat_id: str, message_id: Optional[str]) -> Optional[str]:
@@ -1222,13 +1344,21 @@ async def run_gm_pass(
                 )
                 content, model_reasoning, tokens = _reply_parts(response)
                 reasoning, plan = parse_gm_reply(content)
-                if plan_needs_repair(state, plan):
-                    # One repair turn also covers a missing complete scene roster.
+                opening_pass = kind == "setup" and is_opening(state, chain)
+
+                def lacks_opening(candidate: Optional[dict]) -> bool:
+                    return opening_pass and not _text((candidate or {}).get("opening"))
+
+                if plan_needs_repair(state, plan) or lacks_opening(plan):
+                    # One repair turn also covers a missing complete scene roster, and
+                    # an opening pass that forgot the opening scene card.
                     response = await generate_chat_completion(
                         request,
                         form_data={
                             "model": gm_model,
-                            "messages": build_repair_messages(gm_messages, content),
+                            "messages": build_repair_messages(
+                                gm_messages, content, needs_opening=lacks_opening(plan)
+                            ),
                             "stream": False,
                             token_key: MAX_TOKENS,
                             "metadata": {"task": "game_master", "chat_id": chat_id},
@@ -1241,8 +1371,13 @@ async def run_gm_pass(
                     tokens += repair_tokens
                     if repair_reasoning:
                         model_reasoning = (model_reasoning + "\n\n" + repair_reasoning).strip()
-                    _, plan = parse_gm_reply(repair)
-                    if not plan_needs_repair(state, plan):
+                    _, repaired = parse_gm_reply(repair)
+                    # Keep the first plan if the repair is no better: losing a usable
+                    # plan over a missing opening card would be worse than either.
+                    if not plan_needs_repair(state, repaired) and (
+                        plan_needs_repair(state, plan) or not lacks_opening(repaired)
+                    ):
+                        plan = repaired
                         log.info("GM plan recovered by a repair turn for chat %s", chat_id)
                 duration_ms = int((time.monotonic() - started) * 1000)
                 common = {

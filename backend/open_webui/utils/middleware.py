@@ -109,7 +109,11 @@ from open_webui.utils.filter import (
 from open_webui.utils.code_interpreter import execute_code_jupyter
 from open_webui.utils.payload import apply_system_prompt_to_body
 from open_webui.utils.character_personality import inject_character_personality
-from open_webui.utils.game_master import inject_director_notes, schedule_gm_pass
+from open_webui.utils.game_master import (
+    inject_director_notes,
+    schedule_gm_pass,
+    wait_for_first_plan,
+)
 from open_webui.utils.chat_instructions import (
     CHAT_INSTRUCTIONS_PARAM,
     get_stored_chat_instructions,
@@ -2319,6 +2323,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     # which outrank it.
     if chat_id and user and not chat_id.startswith("local:"):
         try:
+            # A new chat's first reply waits for the GM's first plan instead of
+            # racing it, so the story is steered from the very first turn.
+            await wait_for_first_plan(user.id, chat_id, event_emitter)
             form_data["messages"] = inject_director_notes(
                 form_data["messages"], user.id, chat_id, parent_message_id
             )

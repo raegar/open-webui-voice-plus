@@ -203,3 +203,15 @@ export const findSteeringEntry = (
 	}
 	return byMessage.get('') ?? null;
 };
+
+/** Have the GM open an empty chat: plans session zero and returns the opening scene
+ * card to post as the first message. Waits for the plan. */
+export const openGameMasterStory = async (
+	token: string,
+	chatId: string,
+	model?: string
+): Promise<{ scene: string; status: GameMasterStatus }> =>
+	await gmRequest(token, `${chatPath(chatId)}/opening`, {
+		method: 'POST',
+		body: JSON.stringify({ model: model || null })
+	});

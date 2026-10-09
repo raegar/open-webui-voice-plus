@@ -12,6 +12,7 @@ from open_webui.utils.game_master import (
     find_state_entry_id,
     get_scene_npcs,
     is_running,
+    open_story,
     queue_npc_portrait,
     run_table_talk,
     schedule_gm_pass,
@@ -162,6 +163,37 @@ async def consult_game_master(
     if not schedule_gm_pass(request, user, chat_id, leaf, model_id, kind="consult"):
         raise HTTPException(status_code=400, detail="The Game Master is off for this chat")
     return _status(user, chat_id, chat)
+
+
+class OpeningForm(BaseModel):
+    # The model the chat will use; the chat's own first model if left out.
+    model: Optional[str] = None
+
+
+@router.post("/chats/{chat_id}/opening")
+async def open_game_master_story(
+    request: Request,
+    chat_id: str,
+    form_data: OpeningForm,
+    user=Depends(get_verified_user),
+):
+    """Have the GM open a new, empty chat: plan session zero and write the scene card
+    the player reads as the first message. Waits for the plan."""
+    chat = _chat_or_404(chat_id, user)
+    session = GameMaster.get_session(user.id, chat_id)
+    if not session or not session.enabled:
+        raise HTTPException(status_code=400, detail="The Game Master is off for this chat")
+    leaf, messages = _leaf(chat)
+    if leaf or messages:
+        raise HTTPException(status_code=400, detail="This story has already started")
+    model_id = form_data.model or _chat_model(chat, leaf, messages)
+    scene = await open_story(request, user, chat_id, model_id)
+    if not scene:
+        raise HTTPException(
+            status_code=502,
+            detail="The Game Master did not write an opening. Try again, or type your own first message.",
+        )
+    return {"scene": scene, "status": _status(user, chat_id, chat)}
 
 
 @router.get("/chats/{chat_id}/journal")

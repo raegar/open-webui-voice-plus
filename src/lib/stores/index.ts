@@ -85,6 +85,10 @@ export const gameMasterIndex = writable<{
 export const gameMasterTranscript = writable<{ entryId?: string } | null>(null);
 // A "/gm ..." message from the chat box, for the Game Master panel to send.
 export const gameMasterTalkRequest = writable<string | null>(null);
+// Bumped by the Game Master panel's Start the story button; Chat runs the opening.
+export const gameMasterStartRequest = writable(0);
+// True while the GM is planning a new chat's opening and the first reply is sent.
+export const gameMasterStarting = writable(false);
 export const chatTitle = writable('');
 
 export const channels = writable([]);

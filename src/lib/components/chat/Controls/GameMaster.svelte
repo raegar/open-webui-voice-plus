@@ -21,6 +21,8 @@
 		config,
 		gameMasterTranscript,
 		gameMasterVersion,
+		gameMasterStartRequest,
+		gameMasterStarting,
 		pendingChatCharacterIds,
 		pendingGameMaster,
 		user
@@ -421,8 +423,17 @@
 				/>
 			{/if}
 		{:else}
+			<button
+				class="w-full rounded-lg bg-gray-900 px-3 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-60 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-100"
+				disabled={$gameMasterStarting}
+				on:click={() => gameMasterStartRequest.update((n) => n + 1)}
+			>
+				{$gameMasterStarting ? $i18n.t('The GM is setting the scene…') : $i18n.t('Start the story')}
+			</button>
 			<div class="text-gray-500">
-				{$i18n.t('The GM starts planning as soon as the first message is sent.')}
+				{$i18n.t(
+					'The GM plans the story, writes the opening scene and starts it, so the first reply follows its direction. Attach your characters and mark yours first. Or type your own first message instead.'
+				)}
 			</div>
 		{/if}
 	{/if}

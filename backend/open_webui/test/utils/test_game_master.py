@@ -454,3 +454,45 @@ def test_an_introduce_line_brings_a_planned_npc_in():
 def test_portraits_start_as_soon_as_an_npc_is_entering():
     state = {"npcs": [{"id": "n1", "name": "Marek", "status": "entering", "look": "grey coat"}]}
     assert [n["id"] for n in npcs_needing_portraits(state, {})] == ["n1"]
+
+
+def test_session_zero_on_an_empty_chat_writes_the_opening():
+    from open_webui.utils.game_master import is_opening
+
+    common = dict(
+        characters=[{"id": "c1", "name": "Sam", "description": "A courier.", "kind": "character"}],
+        player_character_id="",
+        config={},
+        chat_instructions="",
+        last_note="",
+    )
+    empty = build_gm_messages(**common, state=None, conversation=[], kind="setup")[1]["content"]
+    assert "session zero" in empty
+    assert "You open it." in empty
+    assert '"opening"' in empty
+
+    # Switched on part way through a chat: plan from what is there, no opening.
+    started = build_gm_messages(
+        **common, state=None, conversation=[{"role": "user", "content": "Hello."}], kind="setup"
+    )[1]["content"]
+    assert "session zero" in started
+    assert "You open it." not in started
+
+    assert is_opening(None, [])
+    assert is_opening(None, [{"role": "user", "content": "<think>x</think>"}])
+    assert not is_opening({"premise": "x"}, [])
+
+
+def test_the_opening_card_is_kept_with_the_plan():
+    state = apply_plan(None, {"opening": "  Rain drums on the harbour office roof.  ", "update": {}})
+    assert state["opening"] == "Rain drums on the harbour office roof."
+    # Later plans without an opening leave it alone.
+    assert apply_plan(state, {"update": {"premise": "x"}})["opening"] == state["opening"]
+
+
+def test_a_missing_opening_gets_asked_for_in_the_repair():
+    from open_webui.utils.game_master import OPENING_REPAIR, REPAIR_PROMPT, build_repair_messages
+
+    asked = build_repair_messages([], "reasoning", needs_opening=True)[-1]["content"]
+    assert asked == REPAIR_PROMPT + OPENING_REPAIR
+    assert build_repair_messages([], "reasoning")[-1]["content"] == REPAIR_PROMPT
