@@ -21,7 +21,7 @@ export type VideoGenerationOptions = {
 	motion_lora?: boolean;
 	motion_lora_variant?: 'hmmotion' | 'm3_unlocked';
 	// Look LoRA in its own slot; combines with motion and turbo.
-	style_lora?: 'flat_anime';
+	style_lora?: 'flat_anime' | 'astro_realism';
 	turbo_lora?: boolean;
 };
 

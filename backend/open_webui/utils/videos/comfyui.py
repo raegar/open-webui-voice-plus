@@ -36,6 +36,13 @@ DEFAULT_MOTION_LORA_VARIANT = "hmmotion"
 # turbo LoRA, which already loads into both the FL2VA and Ref2VA models.
 STYLE_LORAS = {
     "flat_anime": ("FlatAnime_MiniMax_H3.safetensors", 1.0, "Load FlatAnime LoRA"),
+    # Astro Realism: no metadata, recommended strength or trigger word either, and
+    # the same attn qkv/out + mlp fc1/fc2 layer set across all 50 blocks.
+    "astro_realism": (
+        "AstroRealism_MiniMax_H3.safetensors",
+        1.0,
+        "Load Astro Realism LoRA",
+    ),
 }
 TURBO_LORA_NAME = "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
 TURBO_LORA_STRENGTH = 0.5

@@ -153,7 +153,7 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 	let motionLoraChoice: 'off' | 'hmmotion' | 'm3_unlocked' = 'off';
 	$: motionLora = motionLoraChoice !== 'off';
 	// Style slot: a look LoRA that combines with motion and turbo.
-	let styleLoraChoice: 'off' | 'flat_anime' = 'off';
+	let styleLoraChoice: 'off' | 'flat_anime' | 'astro_realism' = 'off';
 	let turboLora = true;
 	let duration: Duration = 10;
 	let seed: string | number | null = '';
@@ -2037,6 +2037,16 @@ Write the final MiniMax H3 production brief now.`
 											bind:group={styleLoraChoice}
 										/>
 										FlatAnime
+									</label>
+									<label class="flex items-center gap-1.5">
+										<input
+											type="radio"
+											name="style-lora"
+											value="astro_realism"
+											class="size-3.5 accent-gray-700"
+											bind:group={styleLoraChoice}
+										/>
+										Astro Realism
 									</label>
 								</div>
 								<span class="mt-0.5 block text-gray-500">

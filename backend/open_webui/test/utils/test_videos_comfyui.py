@@ -422,3 +422,12 @@ def test_unknown_motion_variant_is_rejected():
             "p", "9:16", 0.2, 10, 1, motion_lora=True, motion_lora_variant="nope"
         )
 
+
+
+def test_astro_realism_loads_in_the_style_slot():
+    workflow = build_minimax_h3_workflow(
+        "p", "9:16", 0.2, 10, 1, motion_lora=True, style_lora="astro_realism"
+    )
+    assert _loras(workflow) == [MOTION_LORA_NAME, "AstroRealism_MiniMax_H3.safetensors"]
+    assert workflow["904"]["inputs"]["model"] == ["901", 0]
+    assert workflow["904"]["inputs"]["strength_model"] == 1.0
