@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from html import escape
 from typing import Any, Optional
 
-from open_webui.utils.misc import add_or_update_system_message
+from open_webui.utils.misc import add_or_update_system_message, add_or_update_user_message
 
 
 def _profile_value(character: Any, key: str) -> str:
@@ -142,6 +142,53 @@ def build_character_personality_prompt(characters: Iterable[Any]) -> Optional[st
         "</attached_character_profiles>"
         + (f"\n{setting}" if setting else "")
     )
+
+
+def build_outfit_change_note(characters: Iterable[Any]) -> Optional[str]:
+    """An out-of-character line announcing outfit changes made from the panel.
+
+    The profiles above already say what everyone wears, but the model weighs the
+    recent conversation over standing guidance and keeps describing the old clothes.
+    Stating it as news, on the turn it happened, is what makes it land.
+    """
+    lines = []
+    for character in characters:
+        name = _profile_value(character, "name")
+        if not name:
+            continue
+        # The panel writes the chosen outfit out in full as their state.
+        state = _profile_value(character, "state")
+        outfit = _outfit_of(character)
+        if state:
+            lines.append(f"{name} is now wearing {state}")
+        elif outfit and _profile_value(outfit, "name"):
+            description = _profile_value(outfit, "description")
+            detail = f": {description}" if description else ""
+            lines.append(f"{name} is now wearing {_profile_value(outfit, 'name')}{detail}")
+        else:
+            lines.append(f"{name} is back in their own clothes, as their profile describes")
+    if not lines:
+        return None
+    return (
+        # The append helper adds one newline; this makes it a blank line.
+        "\n(OOC: The user has just changed what "
+        + ("this character is" if len(lines) == 1 else "these characters are")
+        + " wearing. From this reply on, treat it as what they have on: show the "
+        "change if the scene allows it, otherwise simply describe them in it. Do not "
+        "reply to or mention this note.\n"
+        + "\n".join(f"- {line}." for line in lines)
+        + ")"
+    )
+
+
+def inject_outfit_change_note(
+    messages: list[dict], characters: Iterable[Any]
+) -> list[dict]:
+    """Append the outfit change note to the latest user message, unsaved and unseen."""
+    note = build_outfit_change_note(characters)
+    if not note or not messages or messages[-1].get("role") != "user":
+        return messages
+    return add_or_update_user_message(note, messages, append=True)
 
 
 def inject_character_personality(

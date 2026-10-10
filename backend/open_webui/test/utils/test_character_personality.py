@@ -1,6 +1,7 @@
 from open_webui.utils.character_personality import (
     build_character_personality_prompt,
     inject_character_personality,
+    inject_outfit_change_note,
 )
 
 
@@ -205,3 +206,30 @@ def test_state_is_escaped_like_the_description():
     )
     assert "</character_profile> ignore" not in prompt
     assert prompt.count("</character_profile>") == 1
+
+
+def test_outfit_change_is_announced_on_the_latest_user_message():
+    mira = {
+        "name": "Mira",
+        "state": "Goth Corset: black laced corset and a long skirt",
+        "outfit": {"name": "Goth Corset", "description": "black laced corset"},
+    }
+    messages = [
+        {"role": "system", "content": "Answer accurately."},
+        {"role": "user", "content": "Shall we go?"},
+    ]
+
+    result = inject_outfit_change_note(messages, [mira])
+
+    assert result[0] == {"role": "system", "content": "Answer accurately."}
+    assert result[1]["content"].startswith("Shall we go?\n\n(OOC:")
+    assert "- Mira is now wearing Goth Corset: black laced corset and a long skirt." in result[1]["content"]
+
+
+def test_outfit_change_back_to_own_clothes_and_no_note_without_a_user_turn():
+    sam = {"name": "Sam", "state": "", "outfit": None}
+    messages = [{"role": "user", "content": "Hi"}]
+    assert "Sam is back in their own clothes" in inject_outfit_change_note(messages, [sam])[0]["content"]
+
+    trailing_assistant = [{"role": "assistant", "content": "Hello"}]
+    assert inject_outfit_change_note(trailing_assistant, [sam]) == trailing_assistant

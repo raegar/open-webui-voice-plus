@@ -83,6 +83,9 @@ class VideoChatCharacter(Base):
     # clothes. Sits between the description (default look) and state (what has
     # changed during the scene), so either can be edited without losing the other.
     outfit_id = Column(String, nullable=False, default="")
+    # What they wore before an outfit change the model has not yet been told about,
+    # or NULL when there is none. The next reply announces the change and clears it.
+    pending_outfit_from = Column(String, nullable=True, default=None)
     created_at = Column(BigInteger, nullable=False)
 
 
@@ -344,9 +347,36 @@ class VideoCharactersTable:
             )
             if not link:
                 return False
+            # Keep the earliest outfit, so changing and changing back announces nothing.
+            if link.outfit_id != outfit_id and link.pending_outfit_from is None:
+                link.pending_outfit_from = link.outfit_id or ""
             link.outfit_id = outfit_id
             db.commit()
             return True
+
+    def take_outfit_changes(self, user_id: str, chat_id: str) -> set[str]:
+        """Character ids whose outfit changed since the model was last told, clearing
+        the record so each change is announced once."""
+        with get_db() as db:
+            links = (
+                db.query(VideoChatCharacter)
+                .filter(
+                    VideoChatCharacter.user_id == user_id,
+                    VideoChatCharacter.chat_id == chat_id,
+                    VideoChatCharacter.pending_outfit_from.isnot(None),
+                )
+                .all()
+            )
+            changed = {
+                link.character_id
+                for link in links
+                if link.pending_outfit_from != (link.outfit_id or "")
+            }
+            for link in links:
+                link.pending_outfit_from = None
+            if links:
+                db.commit()
+            return changed
 
     def detach(self, user_id: str, chat_id: str, character_id: str) -> bool:
         with get_db() as db:
@@ -387,6 +417,7 @@ def _add_missing_columns() -> None:
         link_wanted = {
             "state": "TEXT NOT NULL DEFAULT ''",
             "outfit_id": "VARCHAR NOT NULL DEFAULT ''",
+            "pending_outfit_from": "VARCHAR",
         }
         link_missing = {n: d for n, d in link_wanted.items() if n not in link_existing}
         if not missing and not link_missing:

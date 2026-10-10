@@ -108,7 +108,10 @@ from open_webui.utils.filter import (
 )
 from open_webui.utils.code_interpreter import execute_code_jupyter
 from open_webui.utils.payload import apply_system_prompt_to_body
-from open_webui.utils.character_personality import inject_character_personality
+from open_webui.utils.character_personality import (
+    inject_character_personality,
+    inject_outfit_change_note,
+)
 from open_webui.utils.game_master import (
     inject_director_notes,
     schedule_gm_pass,
@@ -2310,10 +2313,19 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         try:
             from open_webui.models.video_characters import VideoCharacters
 
+            chat_characters = VideoCharacters.get_for_chat(user.id, chat_id)
             form_data["messages"] = inject_character_personality(
-                form_data["messages"],
-                VideoCharacters.get_for_chat(user.id, chat_id),
+                form_data["messages"], chat_characters
             )
+            # Announce outfit changes made in the panel once, on the reply to the
+            # user's next message, so they need not be repeated in the chat.
+            if form_data["messages"] and form_data["messages"][-1].get("role") == "user":
+                changed = VideoCharacters.take_outfit_changes(user.id, chat_id)
+                if changed:
+                    form_data["messages"] = inject_outfit_change_note(
+                        form_data["messages"],
+                        [c for c in chat_characters if c.id in changed],
+                    )
         except Exception:
             # Character metadata should enhance a chat, never prevent it from replying.
             log.exception("Could not apply attached character profiles to chat completion")
