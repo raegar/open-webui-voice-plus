@@ -716,7 +716,7 @@ This is far too short to tell the whole scene, so do not try. Edit the creative 
 			} else if (kind === 'outfit') {
 				const target = entry?.appliesTo || 'whichever person wears it';
 				wardrobe.push(
-					`${name} — ${pictures}. Mark attribute_transfer onto ${target}: take the garments only, never the face or body of whoever is pictured wearing them. ${description}`
+					`${name} — ${pictures}. Mark attribute_transfer onto ${target}: take the garments only. Never take the face or body of whoever is pictured wearing them, or the background, room, lighting, pose, camera angle or framing of these pictures: they are a clothing catalogue, not a frame of the scene. ${description}`
 				);
 			} else {
 				// A voice only earns an <Audio N> label if the character is actually shown.
@@ -919,6 +919,7 @@ Reference sheet for this scene, grouped by role. Each entry lists the pictures t
 ---
 ${sceneCharacters}
 ---
+Reference pictures supply identity, clothing, or a place, never a frame. Only SETTING pictures may define where the scene happens. The backgrounds, rooms, poses, camera angles and compositions in CAST and WARDROBE pictures belong to the photos, not to this scene: never describe them, and never open the video by recreating any reference picture. ${sceneCharacters.split(String.fromCharCode(10)).includes('SETTING') ? '' : 'No location reference is attached, so take the setting only from the creative direction and the conversation; where they say nothing about it, choose a plain setting that suits the action rather than any reference background. '}In retention_analysis, state for every CAST and WARDROBE picture that its background and composition are discarded.
 Where a character lists an <Audio N> tag, that recording defines their speaking voice: cite it in subject_definitions alongside their pictures and keep their dialogue in that voice. State that the recording supplies timbre, accent and delivery only, and that none of its original words carry into the video. Never give one character another's audio.
 A character with an <Audio N> tag MUST either speak at least one line, written verbatim inside <d>[Language] words.</d>, or be described explicitly as silent in this shot. Never leave a voiced character with no stated speech: the model will invent unintelligible words to fill the gap. Carry dialogue over from the creative direction word for word, but only as much of it as the spoken-word budget allows. Choose the one or two lines that matter most and drop the rest entirely; never paraphrase or compress a long speech to make it fit. A clip that says one line clearly is correct, and one that crams a whole exchange in produces unintelligible speech.
 Every named person below must be rendered from their own reference pictures. Where a character has no written description, describe them only as the references and the scene support.
