@@ -55,6 +55,31 @@
 	// Outfits are not attached on their own; each character picks one to wear.
 	$: attachable = offered.filter((c) => !isOutfit(c));
 	$: outfits = offered.filter(isOutfit);
+	$: people = attachable.filter((c) => (c.kind ?? 'character') !== 'location');
+	$: locations = attachable.filter((c) => c.kind === 'location');
+
+	// A collapsed group still lists what this chat is using, so the scene stays in
+	// view while the rest of a long library is tucked away. Remembered per device.
+	type GroupKey = 'character' | 'location';
+	const GROUPS_KEY = 'owui-character-groups-collapsed';
+	let collapsed: Record<GroupKey, boolean> = { character: false, location: false };
+	try {
+		collapsed = { ...collapsed, ...JSON.parse(localStorage.getItem(GROUPS_KEY) ?? '{}') };
+	} catch {
+		// Storage unavailable or unreadable: every group starts open.
+	}
+	const toggleGroup = (key: GroupKey) => {
+		collapsed = { ...collapsed, [key]: !collapsed[key] };
+		try {
+			localStorage.setItem(GROUPS_KEY, JSON.stringify(collapsed));
+		} catch {
+			// Not remembered, which only costs a tap next time.
+		}
+	};
+	$: groups = [
+		{ key: 'character' as GroupKey, label: $i18n.t('Characters'), items: people },
+		{ key: 'location' as GroupKey, label: $i18n.t('Locations'), items: locations }
+	].filter((group) => group.items.length > 0);
 
 	// Before the first message a chat has no id, so the selection is buffered in a
 	// store and flushed by initChatHandler the moment the chat is created.
@@ -255,69 +280,83 @@
 			<a href="/characters" class="font-medium underline">{$i18n.t('Create one')}</a>
 		</div>
 	{:else}
-		{#each attachable as character (character.id)}
-			{@const isAttached = selectedIds.includes(character.id)}
+		{#each groups as group (group.key)}
+			{@const inScene = group.items.filter((c) => selectedIds.includes(c.id)).length}
 			<button
-				class="flex items-center gap-2 rounded-lg border p-1.5 text-left transition {isAttached
-					? 'border-gray-300 bg-gray-50 dark:border-gray-600 dark:bg-gray-850'
-					: 'border-gray-100 dark:border-gray-850'}"
-				disabled={busyId === character.id}
-				on:click={() => toggle(character)}
+				class="mt-1 flex items-center justify-between text-left text-[11px] font-medium text-gray-500 first:mt-0"
+				on:click={() => toggleGroup(group.key)}
 			>
-				{#if character.image_file_ids.length > 0}
-					<img
-						src={imageUrl(character.image_file_ids[0])}
-						alt={character.name}
-						class="size-8 shrink-0 rounded-md object-cover"
-					/>
-				{:else}
-					<div class="size-8 shrink-0 rounded-md bg-gray-100 dark:bg-gray-900"></div>
-				{/if}
-				<div class="min-w-0 flex-1">
-					<div class="truncate text-xs font-medium">{character.name}</div>
-					<div class="truncate text-[11px] text-gray-500">
-						{#if character.image_file_ids.length === 0}
-							{$i18n.t('No reference images')}
-						{:else}
-							{character.image_file_ids.length}
-							{$i18n.t('images')}{character.voice_file_id
-								? ` · ${$i18n.t('voice')}`
-								: ''}{(character.kind ?? 'character') !== 'character' ? ` · ${character.kind}` : ''}
-						{/if}
-					</div>
-				</div>
-				{#if busyId === character.id}
-					<Spinner className="size-3" />
-				{:else}
-					<span class="shrink-0 text-xs text-gray-500">
-						{isAttached ? (chatId ? $i18n.t('Attached') : $i18n.t('Pending')) : $i18n.t('Add')}
-					</span>
-				{/if}
+				<span>{group.label} · {inScene}/{group.items.length}</span>
+				<span>
+					{collapsed[group.key]
+						? $i18n.t('Show all')
+						: inScene > 0
+							? $i18n.t('Show attached only')
+							: $i18n.t('Hide')}
+				</span>
 			</button>
-			{#if isAttached && (character.kind ?? 'character') === 'character' && chatId && outfits.length > 0}
-				<select
-					class="-mt-1 w-full rounded-none border border-t-0 border-gray-100 bg-transparent px-1.5 py-1 text-[11px] outline-none focus:border-gray-400 dark:border-gray-850"
-					value={outfitIds[character.id] ?? ''}
-					disabled={savingOutfit === character.id}
-					on:change={(e) => saveOutfit(character.id, e.currentTarget)}
+			{#each collapsed[group.key] ? group.items.filter( (c) => selectedIds.includes(c.id) ) : group.items as character (character.id)}
+				{@const isAttached = selectedIds.includes(character.id)}
+				<button
+					class="flex items-center gap-2 rounded-lg border p-1.5 text-left transition {isAttached
+						? 'border-gray-300 bg-gray-50 dark:border-gray-600 dark:bg-gray-850'
+						: 'border-gray-100 dark:border-gray-850'}"
+					disabled={busyId === character.id}
+					on:click={() => toggle(character)}
 				>
-					<option value="">{$i18n.t('Own clothes (from their description)')}</option>
-					{#each outfits as outfit (outfit.id)}
-						<option value={outfit.id}>{$i18n.t('Wearing')}: {outfit.name}</option>
-					{/each}
-				</select>
-			{/if}
-			{#if isAttached && (character.kind ?? 'character') === 'character'}
-				<!-- Several lines tall: a chosen outfit is written out here in full. -->
-				<textarea
-					class="-mt-1 w-full resize-y rounded-b-lg border border-t-0 border-gray-100 bg-transparent px-2 py-1 text-[11px] outline-none focus:border-gray-400 dark:border-gray-850"
-					rows={states[character.id] ? 3 : 1}
-					placeholder={$i18n.t('Currently wearing… (kept for this chat)')}
-					value={states[character.id] ?? ''}
-					disabled={savingState === character.id}
-					on:blur={(e) => saveState(character.id, e.currentTarget.value)}
-				></textarea>
-			{/if}
+					{#if character.image_file_ids.length > 0}
+						<img
+							src={imageUrl(character.image_file_ids[0])}
+							alt={character.name}
+							class="size-8 shrink-0 rounded-md object-cover"
+						/>
+					{:else}
+						<div class="size-8 shrink-0 rounded-md bg-gray-100 dark:bg-gray-900"></div>
+					{/if}
+					<div class="min-w-0 flex-1">
+						<div class="truncate text-xs font-medium">{character.name}</div>
+						<div class="truncate text-[11px] text-gray-500">
+							{#if character.image_file_ids.length === 0}
+								{$i18n.t('No reference images')}
+							{:else}
+								{character.image_file_ids.length}
+								{$i18n.t('images')}{character.voice_file_id ? ` · ${$i18n.t('voice')}` : ''}
+							{/if}
+						</div>
+					</div>
+					{#if busyId === character.id}
+						<Spinner className="size-3" />
+					{:else}
+						<span class="shrink-0 text-xs text-gray-500">
+							{isAttached ? (chatId ? $i18n.t('Attached') : $i18n.t('Pending')) : $i18n.t('Add')}
+						</span>
+					{/if}
+				</button>
+				{#if isAttached && (character.kind ?? 'character') === 'character' && chatId && outfits.length > 0}
+					<select
+						class="-mt-1 w-full rounded-none border border-t-0 border-gray-100 bg-transparent px-1.5 py-1 text-[11px] outline-none focus:border-gray-400 dark:border-gray-850"
+						value={outfitIds[character.id] ?? ''}
+						disabled={savingOutfit === character.id}
+						on:change={(e) => saveOutfit(character.id, e.currentTarget)}
+					>
+						<option value="">{$i18n.t('Own clothes (from their description)')}</option>
+						{#each outfits as outfit (outfit.id)}
+							<option value={outfit.id}>{$i18n.t('Wearing')}: {outfit.name}</option>
+						{/each}
+					</select>
+				{/if}
+				{#if isAttached && (character.kind ?? 'character') === 'character'}
+					<!-- Several lines tall: a chosen outfit is written out here in full. -->
+					<textarea
+						class="-mt-1 w-full resize-y rounded-b-lg border border-t-0 border-gray-100 bg-transparent px-2 py-1 text-[11px] outline-none focus:border-gray-400 dark:border-gray-850"
+						rows={states[character.id] ? 3 : 1}
+						placeholder={$i18n.t('Currently wearing… (kept for this chat)')}
+						value={states[character.id] ?? ''}
+						disabled={savingState === character.id}
+						on:blur={(e) => saveState(character.id, e.currentTarget.value)}
+					></textarea>
+				{/if}
+			{/each}
 		{/each}
 
 		<div class="flex items-center justify-between text-[11px] text-gray-500">
