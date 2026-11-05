@@ -5,6 +5,7 @@
 
 	import { generateOpenAIChatCompletion } from '$lib/apis/openai';
 	import { excludeAttachedNpcs } from '$lib/utils/sceneCast';
+	import { pruneUnspokenVoices } from '$lib/utils/voiceCasting';
 	import { deleteFileById } from '$lib/apis/files';
 	import {
 		cancelVideoGenerationJob,
@@ -717,7 +718,7 @@ Whole-cast direction is on. The creative direction is one character's turn, so i
 				if (fileIds.length > 0) unpictured.push(entry.name.trim());
 				const description = entry?.description?.trim() || 'No written description provided.';
 				cast.push(
-					`${entry.name.trim()} — no reference picture. Describe them in full from this text: ${description}`
+					`${entry.name.trim()} — no reference picture and no voice recording. Describe them in full from this text: ${description}`
 				);
 				castNames.push(entry.name.trim());
 				continue;
@@ -746,6 +747,8 @@ Whole-cast direction is on. The creative direction is one character's turn, so i
 				if (entry?.voiceFileId && voices.length < MAX_REFERENCE_AUDIOS) {
 					voices.push(entry.voiceFileId);
 					audioLabel = ` Their speaking voice is <Audio ${voices.length}>.`;
+				} else {
+					audioLabel = ' No voice recording.';
 				}
 				// Clothing is layered: a chosen outfit replaces the clothing in the library
 				// description, and present state overrides both, since it records what has
@@ -942,8 +945,10 @@ Reference sheet for this scene, grouped by role. Each entry lists the pictures t
 ${sceneCharacters}
 ---
 Reference pictures supply identity, clothing, or a place, never a frame. Only SETTING pictures may define where the scene happens. The backgrounds, rooms, poses, camera angles and compositions in CAST and WARDROBE pictures belong to the photos, not to this scene: never describe them, and never open the video by recreating any reference picture. ${sceneCharacters.split(String.fromCharCode(10)).includes('SETTING') ? '' : 'No location reference is attached, so take the setting only from the creative direction and the conversation; where they say nothing about it, choose a plain setting that suits the action rather than any reference background. '}In retention_analysis, state for every CAST and WARDROBE picture that its background and composition are discarded.
-Where a character lists an <Audio N> tag, that recording defines their speaking voice: cite it in subject_definitions alongside their pictures and keep their dialogue in that voice. State that the recording supplies timbre, accent and delivery only, and that none of its original words carry into the video. Never give one character another's audio.
-A character with an <Audio N> tag MUST either speak at least one line, written verbatim inside <d>[Language] words.</d>, or be described explicitly as silent in this shot. Never leave a voiced character with no stated speech: the model will invent unintelligible words to fill the gap. Carry dialogue over from the creative direction word for word, but only as much of it as the spoken-word budget allows. Choose the one or two lines that matter most and drop the rest entirely; never paraphrase or compress a long speech to make it fit. A clip that says one line clearly is correct, and one that crams a whole exchange in produces unintelligible speech.
+Where a character lists an <Audio N> tag, that recording defines their speaking voice. Every recording cited anywhere in the brief is available to every speaker, and the video model hands a recorded voice to whoever speaks, so cite a character's <Audio N> tag only if that character speaks at least one line in this clip. Then cite it in subject_definitions alongside their pictures, keep their dialogue in that voice, and state that the recording supplies timbre, accent and delivery only and that none of its original words carry into the video. A voiced character who says nothing in this clip is described as silent, and their <Audio N> tag must not appear anywhere in the brief. Never give one character another's audio.
+A character with an <Audio N> tag MUST either speak at least one line, written verbatim inside <d>[Language] words.</d>, or be described explicitly as silent in this shot. Never leave a voiced character with no stated speech: the model will invent unintelligible words to fill the gap.
+Anyone who speaks without an <Audio N> tag of their own, such as a character marked as having no voice recording, needs a voice described in words in their subject_definitions entry: sex, apparent age, pitch, timbre, accent and manner of speaking, chosen to be clearly different from every recorded voice in the scene. State that they have no voice recording and that no <Audio N> belongs to them.
+Name the speaker of every line by their <Subject N> tag in the same sentence, before the <d> tag and with no other subject tag in between, for example "<Subject 3> shouts <d>[English] Stop!</d>". Never introduce a line with only "he" or "she". Carry dialogue over from the creative direction word for word, but only as much of it as the spoken-word budget allows. Choose the one or two lines that matter most and drop the rest entirely; never paraphrase or compress a long speech to make it fit. A clip that says one line clearly is correct, and one that crams a whole exchange in produces unintelligible speech.
 Every named person below must be rendered from their own reference pictures. Where a character has no written description, describe them only as the references and the scene support.
 `
 		: ''
@@ -1352,11 +1357,21 @@ Write the final MiniMax H3 production brief now.`
 		// Tolerate a malformed roster rather than throwing inside the prepare step.
 		const attachedVoices = Array.isArray(sceneVoices) ? sceneVoices : [];
 		const hasDialogue = promptHasDialogue(productionPrompt);
-		const voiceFileIds = hasDialogue ? attachedVoices : [];
+		// A recording whose owner says nothing in the clip would be lent to whoever does
+		// speak, so only the voices of actual speakers go to the render.
+		const castVoices = hasDialogue
+			? pruneUnspokenVoices(productionPrompt.trim(), attachedVoices)
+			: { brief: productionPrompt.trim(), voiceIds: [], dropped: 0 };
+		const voiceFileIds = castVoices.voiceIds;
 		// Send a brief that cannot ask for speech it never specifies.
 		const outboundPrompt = hasDialogue
-			? productionPrompt.trim()
+			? castVoices.brief
 			: silenceProductionPrompt(productionPrompt.trim());
+		if (castVoices.dropped > 0) {
+			toast.info(
+				`Left out ${castVoices.dropped === 1 ? 'a voice recording' : `${castVoices.dropped} voice recordings`} for characters who do not speak in this clip, so nobody else can borrow ${castVoices.dropped === 1 ? 'it' : 'them'}.`
+			);
+		}
 		if (attachedVoices.length > 0 && !hasDialogue) {
 			toast.warning(
 				'No dialogue in the brief, so the voice references were dropped and the shot was marked silent. A voice with nothing to say produces garbled speech. Put the spoken lines in <d>...</d> tags and redraft to use it.'
