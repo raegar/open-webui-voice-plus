@@ -49,6 +49,9 @@
 	let loading = false;
 	let characters: VideoCharacter[] = [];
 	let newName = '';
+	// Chosen next to the name so a new outfit or location is created as one, rather
+	// than as a character that then has to be switched over.
+	let newKind: (typeof KINDS)[number]['value'] = 'character';
 	let creating = false;
 	let busyId: string | null = null;
 	let fileInput: HTMLInputElement;
@@ -88,6 +91,8 @@
 	$: viewCharacters = visibleCharacters.filter((c) => !!c.archived === showArchived);
 	$: if (showArchived && archivedCount === 0) showArchived = false;
 
+	$: newKindLabel = KINDS.find((k) => k.value === newKind)?.label ?? 'Character';
+
 	type KindFilter = 'all' | (typeof KINDS)[number]['value'];
 	type SortOrder = 'name' | 'name-desc' | 'newest' | 'oldest';
 	const SORTS: { value: SortOrder; label: string }[] = [
@@ -116,6 +121,8 @@
 		}
 	};
 	$: saveView(kindFilter, sortOrder);
+	// Browsing one type usually means adding more of it, so start the picker there.
+	$: if (kindFilter !== 'all') newKind = kindFilter;
 
 	$: kindCounts = viewCharacters.reduce(
 		(counts, c) => {
@@ -182,14 +189,15 @@
 			const created = await createVideoCharacter(localStorage.token, {
 				name,
 				description: '',
-				image_file_ids: []
+				image_file_ids: [],
+				kind: newKind
 			});
 			characters = [...characters, created].sort((a, b) => a.name.localeCompare(b.name));
 			newName = '';
-			// A new entry is always a character; make sure the filters are not hiding it.
+			// Make sure the filters are not hiding the new entry.
 			search = '';
 			showArchived = false;
-			if (kindFilter !== 'character') kindFilter = 'all';
+			if (kindFilter !== newKind) kindFilter = 'all';
 		} catch (error) {
 			toast.error(`${error}`);
 		} finally {
@@ -811,10 +819,19 @@ ${VISION_RULES}`
 						Reference images keep a character's face consistent across generated scenes. Attach them
 						to a chat from that chat's Controls panel, then use "Generate video of this scene".
 					</p>
-					<div class="mt-4 flex gap-2">
+					<div class="mt-4 flex flex-wrap gap-2">
+						<select
+							class="shrink-0 rounded-xl border border-gray-200 bg-transparent px-2 py-2 text-sm outline-none focus:border-gray-500 dark:border-gray-700"
+							aria-label="Type of new entry"
+							bind:value={newKind}
+						>
+							{#each KINDS as k}
+								<option value={k.value}>{k.label}</option>
+							{/each}
+						</select>
 						<input
-							class="flex-1 rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm outline-none focus:border-gray-500 dark:border-gray-700"
-							placeholder="New character name"
+							class="min-w-0 flex-1 basis-48 rounded-xl border border-gray-200 bg-transparent px-3 py-2 text-sm outline-none focus:border-gray-500 dark:border-gray-700"
+							placeholder={`New ${newKindLabel.toLowerCase()} name`}
 							bind:value={newName}
 							on:keydown={(e) => e.key === 'Enter' && addCharacter()}
 						/>
@@ -823,7 +840,7 @@ ${VISION_RULES}`
 							disabled={!newName.trim() || creating}
 							on:click={addCharacter}
 						>
-							{creating ? 'Adding...' : 'Add character'}
+							{creating ? 'Adding...' : `Add ${newKindLabel.toLowerCase()}`}
 						</button>
 					</div>
 					<div class="mt-3 flex flex-wrap items-center justify-end gap-2">
@@ -913,8 +930,8 @@ ${VISION_RULES}`
 					</div>
 					{#if showArchived}
 						<p class="-mt-2 text-xs text-gray-500">
-							Archived entries are left out of the chat character pickers. Any chat they are
-							already in keeps them.
+							Archived entries are left out of the chat character pickers. Any chat they are already
+							in keeps them.
 							<button class="underline" on:click={() => (showArchived = false)}
 								>Back to library</button
 							>
