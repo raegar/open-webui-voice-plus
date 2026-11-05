@@ -135,6 +135,9 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 	// When true the studio adopts the model of the chat a scene came from (the
 	// original behaviour). When false the saved default below is always used.
 	let useChatModel = true;
+	// The creative direction is one character's turn, so it rarely says what anyone
+	// else is doing; when true the draft is told to stage the rest of the cast too.
+	let directWholeCast = false;
 	let savingModelPreference = false;
 	// Guards the persist watcher: set whenever the model is changed for us (initial
 	// load, or a scene handoff) so those do not overwrite the saved default.
@@ -339,6 +342,7 @@ This is far too short to tell the whole scene, so do not try. Edit the creative 
 			settings.set({
 				...$settings,
 				videoPromptUseChatModel: useChatModel,
+				videoPromptDirectWholeCast: directWholeCast,
 				videoPromptModel: selectedModelId
 			});
 			await updateUserSettings(localStorage.token, { ui: $settings });
@@ -357,6 +361,23 @@ This is far too short to tell the whole scene, so do not try. Edit the creative 
 
 	const markPromptForReview = () => {
 		promptApproved = false;
+	};
+
+	// Who the "whole cast" section names: everyone on the reference sheet except a
+	// point-of-view subject, who is never in frame to react.
+	const ensembleDirection = (castNames: string[], pov: string) => {
+		const others = castNames.filter((name) => name !== pov);
+		const who = others.length
+			? `everyone else in the scene (${others.join(', ')}), not only the character the creative direction is about`
+			: 'everyone else present in the scene, not only the character the creative direction is about';
+		return `
+Whole-cast direction is on. The creative direction is one character's turn, so it says little or nothing about anyone else, yet everyone in the scene is fully present and engaged with what that character says and does. Write behaviour for ${who}, shot by shot, even where the creative direction never mentions them:
+- Place each of them deliberately in relation to the character in focus, and keep them in frame where the framing allows. Prefer two-shots and over-the-shoulder framings that hold both people over singles that drop someone out; when a shot does exclude someone, say where they are.
+- Their attention is on the character in focus: eyes on them, head and shoulders turned toward them, following each gesture, movement and touch with their gaze.
+- Tie every reaction to a specific beat as it happens, such as "as the line about the letter is spoken, the listener glances down at it", rather than generic listening. Choose reactions that fit their personality, their relationship to the character in focus, and what they last said and did in the conversation.
+- Give each of them at least one active physical response per shot: leaning in, stepping closer, reaching out, setting down what they hold, folding or unfolding their arms, or a glance at someone else in the scene.
+- These reactions are silent. They add no dialogue and no vocal sounds beyond the creative direction, take no shot or runtime of their own, and never upstage or contradict what the character in focus does.
+`;
 	};
 
 	const selectMode = (mode: WorkflowMode) => {
@@ -883,6 +904,7 @@ This is far too short to tell the whole scene, so do not try. Edit the creative 
 		const styleForDraft = videoStyle;
 		const povForDraft = povSubject;
 		const styleSection = videoStyleDirection(styleForDraft, { povSubject: povForDraft });
+		const wholeCastSection = directWholeCast ? ensembleDirection(sceneCastNames, povForDraft) : '';
 		try {
 			const response = await generateOpenAIChatCompletion(localStorage.token, {
 				model: selectedModelId,
@@ -943,7 +965,7 @@ Rules for this scene:
 - Give explicit camera framing and movement, and a full soundscape including any speech.
 `
 								: ''
-						}${
+						}${wholeCastSection}${
 							continuationSource
 								? `
 This clip is a direct continuation. The first-frame anchor is the final frame of the previous clip, so the new shot must begin exactly where that one ended. The previous clip's brief was:
@@ -1543,6 +1565,7 @@ Write the final MiniMax H3 production brief now.`
 			return;
 		}
 		useChatModel = $settings?.videoPromptUseChatModel ?? true;
+		directWholeCast = $settings?.videoPromptDirectWholeCast ?? false;
 		// A saved default wins over the generic chat defaults, but only if the model
 		// still exists; a deleted model would otherwise leave the selector empty.
 		const savedModel = $settings?.videoPromptModel;
@@ -2104,9 +2127,26 @@ Write the final MiniMax H3 production brief now.`
 						bind:value={creativeDirection}
 						on:input={markPromptForReview}
 					></textarea>
-					<div class="mt-3 flex justify-end">
+					<div class="mt-3 flex items-center justify-between gap-3">
+						<label
+							class="flex items-start gap-2 text-xs"
+							title="The creative direction is one character's turn. With this on, the draft also writes what everyone else in the scene is doing and how they react to it."
+						>
+							<input
+								type="checkbox"
+								class="mt-0.5 size-3.5 accent-gray-700"
+								bind:checked={directWholeCast}
+								on:change={persistModelPreference}
+							/>
+							<span>
+								<span class="font-medium">Direct the whole cast</span>
+								<span class="block text-gray-500"
+									>Write reactions for the other characters too. Applies on the next draft.</span
+								>
+							</span>
+						</label>
 						<button
-							class="rounded-xl px-4 py-2 text-sm font-medium disabled:cursor-not-allowed {productionPrompt
+							class="shrink-0 rounded-xl px-4 py-2 text-sm font-medium disabled:cursor-not-allowed {productionPrompt
 								? 'bg-black text-white disabled:opacity-40 dark:bg-white dark:text-black'
 								: !selectedModelId || !creativeDirection.trim()
 									? 'bg-gray-200 text-gray-500 dark:bg-gray-800 dark:text-gray-500'
