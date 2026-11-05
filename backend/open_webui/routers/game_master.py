@@ -165,6 +165,23 @@ async def consult_game_master(
     return _status(user, chat_id, chat)
 
 
+@router.post("/chats/{chat_id}/arc")
+async def plan_game_master_arc(
+    request: Request,
+    chat_id: str,
+    form_data: ConsultForm,
+    user=Depends(get_verified_user),
+):
+    """Give a chat whose plan has no long-range arc one, worked out from the story so
+    far, filling in a thin plan as it goes. Runs in the background like Consult."""
+    chat = _chat_or_404(chat_id, user)
+    leaf, messages = _leaf(chat)
+    model_id = form_data.model or _chat_model(chat, leaf, messages)
+    if not schedule_gm_pass(request, user, chat_id, leaf, model_id, kind="arc"):
+        raise HTTPException(status_code=400, detail="The Game Master is off for this chat")
+    return _status(user, chat_id, chat)
+
+
 class OpeningForm(BaseModel):
     # The model the chat will use; the chat's own first model if left out.
     model: Optional[str] = None

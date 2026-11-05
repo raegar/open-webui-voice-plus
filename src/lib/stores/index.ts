@@ -83,6 +83,8 @@ export const gameMasterIndex = writable<{
 } | null>(null);
 // Open the GM transcript, optionally scrolled to one entry.
 export const gameMasterTranscript = writable<{ entryId?: string } | null>(null);
+// Open the GM's whole current plan for the open chat.
+export const gameMasterPlanOpen = writable(false);
 // A "/gm ..." message from the chat box, for the Game Master panel to send.
 export const gameMasterTalkRequest = writable<string | null>(null);
 // Bumped by the Game Master panel's Start the story button; Chat runs the opening.

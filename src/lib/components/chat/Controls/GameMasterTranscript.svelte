@@ -18,7 +18,8 @@
 		consult: 'Consulted',
 		reroll: 'Rerolled',
 		table_talk: 'Table talk',
-		talk_plan: 'Plan after table talk'
+		talk_plan: 'Plan after table talk',
+		arc: 'Planned the story arc'
 	};
 
 	let entries: GameMasterEntry[] = [];

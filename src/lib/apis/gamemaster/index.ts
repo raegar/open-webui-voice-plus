@@ -50,7 +50,7 @@ export type SceneNpc = {
 export type GameMasterEntry = {
 	id: string;
 	message_id: string;
-	kind: 'setup' | 'turn' | 'consult' | 'reroll' | 'table_talk' | 'talk_plan';
+	kind: 'setup' | 'turn' | 'consult' | 'reroll' | 'table_talk' | 'talk_plan' | 'arc';
 	prior_id: string;
 	user_message: string;
 	gm_reply: string;
@@ -215,3 +215,8 @@ export const openGameMasterStory = async (
 		method: 'POST',
 		body: JSON.stringify({ model: model || null })
 	});
+
+/** Have the GM work out a long-range story arc for a chat whose plan has none. Runs
+ * in the background; poll the status until it is no longer running. */
+export const planGameMasterArc = async (token: string, chatId: string): Promise<GameMasterStatus> =>
+	await gmRequest(token, `${chatPath(chatId)}/arc`, { method: 'POST', body: '{}' });

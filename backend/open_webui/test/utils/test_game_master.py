@@ -496,3 +496,83 @@ def test_a_missing_opening_gets_asked_for_in_the_repair():
     asked = build_repair_messages([], "reasoning", needs_opening=True)[-1]["content"]
     assert asked == REPAIR_PROMPT + OPENING_REPAIR
     assert build_repair_messages([], "reasoning")[-1]["content"] == REPAIR_PROMPT
+
+
+# --- Story arc ------------------------------------------------------------------
+
+
+def test_the_arc_merges_by_id_and_keeps_exactly_one_milestone_current():
+    from open_webui.utils.game_master import merge_arc
+
+    arc = apply_plan(
+        None,
+        {
+            "update": {
+                "arc": {
+                    "destination": "Sam must choose between Alex and the family.",
+                    "milestones": [
+                        {"id": "m1", "beat": "the ledger surfaces"},
+                        {"id": "m2", "beat": "the brother returns"},
+                    ],
+                    "twists": [{"id": "w1", "reveal": "the buyer is the brother", "seeding": "his handwriting"}],
+                }
+            }
+        },
+    )["arc"]
+    # Nothing marked current: the first one still ahead becomes current.
+    assert [m["status"] for m in arc["milestones"]] == ["current", "ahead"]
+    assert arc["twists"][0]["status"] == "seeding"
+
+    # Reaching m1 without naming the next: m2 takes over as current.
+    arc = merge_arc(arc, {"milestones": [{"id": "m1", "status": "reached"}]})
+    assert [m["status"] for m in arc["milestones"]] == ["reached", "current"]
+    assert arc["destination"] == "Sam must choose between Alex and the family."
+
+    # Two marked current: the earliest open one wins.
+    arc = merge_arc(arc, {"milestones": [{"id": "m3", "beat": "the fire", "status": "current"}]})
+    assert [m["status"] for m in arc["milestones"]] == ["reached", "current", "ahead"]
+
+
+def test_arc_changes_are_described_with_spoilers_covered():
+    before = {"arc": {"destination": "a reckoning", "milestones": [{"id": "m1", "beat": "the ledger surfaces", "status": "current"}]}}
+    after = {
+        "arc": {
+            "destination": "a reckoning",
+            "milestones": [
+                {"id": "m1", "beat": "the ledger surfaces", "status": "reached"},
+                {"id": "m2", "beat": "the brother returns", "status": "current"},
+            ],
+            "twists": [{"id": "w1", "reveal": "the buyer is the brother", "status": "seeding"}],
+        }
+    }
+    lines = {line["text"]: line["spoiler"] for line in describe_changes(before, after)}
+    assert lines["Milestone reached: the ledger surfaces"] is False
+    assert lines["Milestone planned: the brother returns"] is True
+    assert lines["Twist being seeded: the buyer is the brother"] is True
+    assert lines.get("Arc heading for: a reckoning") is None
+    assert describe_changes({}, {"arc": {"destination": "a reckoning"}}) == [
+        {"text": "Arc heading for: a reckoning", "spoiler": True}
+    ]
+
+
+def test_an_arc_pass_asks_for_an_arc_and_repairs_without_one():
+    from open_webui.utils.game_master import ARC_REPAIR, REPAIR_PROMPT, build_repair_messages, plan_has_arc
+
+    messages = build_gm_messages(
+        characters=[], player_character_id="", config={}, chat_instructions="",
+        state={"premise": "x"}, last_note="", conversation=[{"role": "user", "content": "Hi"}], kind="arc",
+    )
+    assert "no long-range arc yet" in messages[1]["content"]
+    assert "Keep an arc" in messages[0]["content"]
+
+    assert not plan_has_arc({"update": {"arc": {"destination": "x"}}})
+    assert plan_has_arc({"update": {"arc": {"destination": "x", "milestones": [{"beat": "y"}]}}})
+    assert build_repair_messages([], "r", needs_arc=True)[-1]["content"] == REPAIR_PROMPT + ARC_REPAIR
+
+
+def test_session_zero_now_plans_an_arc():
+    setup = build_gm_messages(
+        characters=[], player_character_id="", config={}, chat_instructions="",
+        state=None, last_note="", conversation=[{"role": "user", "content": "Hi"}],
+    )[1]["content"]
+    assert "the arc (a destination" in setup

@@ -88,6 +88,7 @@ Principles:
 11. Respect the player's agenda, their directives and the chat instructions. Make the story harder, never into something the player said they do not want.
 12. Pace yourself. Not every turn needs a new event. Some turns the right note is simply: hold your ground.
 13. Work the player's requests (player_requests) into the story over the coming scenes, in ways that fit what is already happening. Mark one in_progress once you have started on it and done once it has landed.
+14. Keep an arc: the shape of the story over many scenes, not just the next beat. It has a destination (the climax you are building toward: the confrontation, choice or revelation everything leads to), three to five milestones on the way there in order, and one or two twists you are seeding long before they land. Exactly one milestone is current: the one the next few scenes work toward. Each turn, ask whether the story moved toward it, mark it reached when it lands, and make the next one current. Foreshadow a twist through small details in your notes long before its reveal, so it feels inevitable afterwards rather than arbitrary. The arc is your intent, not a script: when the player pulls the story somewhere else, rework the milestones or the destination to fit where it is really going, rather than forcing it back on course.
 
 Intensity: {intensity}
 
@@ -119,13 +120,18 @@ The JSON:
     "secrets": [{{ "id": "s1", "text": "...", "known_by": ["names"], "reveal": "when or how" }}],
     "player_requests": [{{ "id": "r1", "text": "what the player asked for", "status": "planned | in_progress | done | declined", "plan": "how you will work it in" }}],
     "player_directives": ["binding out-of-character instructions from the player"],
-    "tension": {{ "current": 0, "target": 0 }}
+    "tension": {{ "current": 0, "target": 0 }},
+    "arc": {{
+      "destination": "the climax the story is building toward",
+      "milestones": [{{ "id": "m1", "beat": "what happens", "status": "ahead | current | reached | dropped" }}],
+      "twists": [{{ "id": "w1", "reveal": "what the story will turn out to be hiding", "seeding": "how you are foreshadowing it", "status": "seeding | revealed | dropped" }}]
+    }}
   }},
   "remove": {{ "npcs": ["ids"], "threads": ["ids"], "clocks": ["ids"], "secrets": ["ids"], "player_requests": ["ids"], "player_directives": ["exact text"] }},
   "note": "the director's note for the next reply"
 }}
 
-"update" holds only what changes. Anything you leave out stays as it is. List items are matched by id: an existing id updates that item, a new id adds one. Use short ids such as n1, t2, c3, s4. A character's stance issue set to null is dropped.
+"update" holds only what changes. Anything you leave out stays as it is. List items are matched by id: an existing id updates that item, a new id adds one. Use short ids such as n1, t2, c3, s4, m1, w1. A character's stance issue set to null is dropped. Inside "arc", "destination" replaces the old one when given, and milestones and twists are matched by id like the other lists.
 "scene" is a complete current snapshot, not a patch. Always supply it, even if the location has not changed. Use exact ids from the existing NPCs or NPCs added in this plan. NPCs left behind must be omitted from scene.npc_ids; this automatically marks them off_stage without erasing their card or portrait. Retain silent NPCs who are still physically there. Exclude merely remembered or remote people and NPCs you plan to introduce in the NEXT reply (status entering), since they have not arrived yet. Do not move the player to a location you intend for the future.
 
 Writing the note:
@@ -141,7 +147,8 @@ SETUP_TASK = (
     "characters, the setting, the player's agenda and the conversation so far: a "
     "premise, each non-player character's drives and stances, two or three threads, "
     "a clock or two, any secrets, the NPCs you intend to bring in (status planned), "
-    "and the first note."
+    "the arc (a destination, three to five milestones with the first one current, and "
+    "a twist to start seeding), and the first note."
 )
 # Session zero on an empty chat: the GM opens the story rather than waiting for the
 # player to set the scene, so the first reply already follows its plan.
@@ -166,8 +173,25 @@ OPENING_REPAIR = (
 TURN_TASK = (
     "Review the latest reply against your plan. Did anyone cave, drift out of "
     "character or let tension drain away? Did the player attempt something the "
-    "world should answer? Then update your plan and write the note for the next "
-    "reply."
+    "world should answer? Did the story move toward the current milestone of your "
+    "arc, reach it, or turn somewhere that means the arc should change? Then update "
+    "your plan and write the note for the next reply."
+)
+# For a chat whose plan predates arcs, or is thin: plan the long shape from the
+# story so far, without disturbing what is already working.
+ARC_TASK = (
+    "Your plan has no long-range arc yet. Work one out from the story so far: where "
+    "this story is really heading (the destination), three to five milestones between "
+    "here and there with the first unreached one current, and a twist to start "
+    "seeding. Build it from what has already happened and from the characters' "
+    "drives, so it grows out of this story rather than replacing it. If the rest of "
+    "your plan is thin (no secrets, no NPCs in the wings, a single thread), add what "
+    "the arc needs. Keep what already works, and write a note for the next reply that "
+    "starts moving toward the current milestone."
+)
+ARC_REPAIR = (
+    " The plan must also include update.arc: a destination, three to five milestones "
+    "with one current, and at least one twist."
 )
 CONSULT_TASK = (
     "The player asked you to take another look at the story as it stands, perhaps "
@@ -450,7 +474,49 @@ def apply_plan(state: Optional[dict], plan: dict) -> dict:
         if merged:
             result["tension"] = merged
 
+    arc_update = update.get("arc")
+    if isinstance(arc_update, dict):
+        result["arc"] = merge_arc(result.get("arc"), arc_update)
+
     return result
+
+
+ARC_MILESTONES = 8
+ARC_TWISTS = 4
+MILESTONE_STATUSES = ("ahead", "current", "reached", "dropped")
+TWIST_STATUSES = ("seeding", "revealed", "dropped")
+
+
+def merge_arc(arc: Any, update: dict) -> dict:
+    """Patch the arc: a new destination replaces the old, list items merge by id.
+
+    Exactly one milestone stays current: if the plan marks several, the earliest
+    still-open one wins; if it marks none, the first one still ahead becomes current.
+    """
+    arc = copy.deepcopy(arc) if isinstance(arc, dict) else {}
+    if _text(update.get("destination")):
+        arc["destination"] = _clip(update["destination"].strip())
+    for key, prefix, limit in (("milestones", "m", ARC_MILESTONES), ("twists", "w", ARC_TWISTS)):
+        items = arc.get(key) if isinstance(arc.get(key), list) else []
+        if key in update:
+            items = _merge_items(items, update.get(key), prefix, limit)
+        if items:
+            arc[key] = items
+    milestones = arc.get("milestones", [])
+    for milestone in milestones:
+        if milestone.get("status") not in MILESTONE_STATUSES:
+            milestone["status"] = "ahead"
+    current = [m for m in milestones if m["status"] == "current"]
+    for extra in current[1:]:
+        extra["status"] = "ahead"
+    if not current:
+        upcoming = next((m for m in milestones if m["status"] == "ahead"), None)
+        if upcoming:
+            upcoming["status"] = "current"
+    for twist in arc.get("twists", []):
+        if twist.get("status") not in TWIST_STATUSES:
+            twist["status"] = "seeding"
+    return arc
 
 
 def validated_scene_snapshot(snapshot: Any, npcs: list[dict]) -> Optional[dict]:
@@ -660,6 +726,32 @@ def describe_changes(before: Optional[dict], after: Optional[dict]) -> list[dict
             if previous is not None
             else f"Tension: {tension['current']}{target}"
         )
+
+    old_arc, arc = before.get("arc") or {}, after.get("arc") or {}
+    if _text(arc.get("destination")) and arc.get("destination") != old_arc.get("destination"):
+        add(
+            ("Arc heading changed: " if old_arc.get("destination") else "Arc heading for: ")
+            + arc["destination"],
+            True,
+        )
+    old_milestones = _by_id(old_arc.get("milestones"))
+    for milestone_id, milestone in _by_id(arc.get("milestones")).items():
+        beat = _text(milestone.get("beat")) or milestone_id
+        status = milestone.get("status")
+        old = old_milestones.get(milestone_id)
+        if not old:
+            add(f"Milestone planned: {beat}", True)
+        elif old.get("status") != status:
+            # Reaching a milestone is something the player just saw happen.
+            add(f"Milestone {status}: {beat}", status != "reached")
+    old_twists = _by_id(old_arc.get("twists"))
+    for twist_id, twist in _by_id(arc.get("twists")).items():
+        reveal = _text(twist.get("reveal")) or twist_id
+        old = old_twists.get(twist_id)
+        if not old:
+            add(f"Twist being seeded: {reveal}", True)
+        elif old.get("status") != twist.get("status"):
+            add(f"Twist {twist.get('status')}: {reveal}", twist.get("status") != "revealed")
     return lines
 
 
@@ -908,6 +1000,8 @@ def build_gm_messages(
         tasks.append(SETUP_TASK)
         if is_opening(state, conversation):
             tasks.append(OPENING_TASK)
+    elif kind == "arc":
+        tasks.append(ARC_TASK)
     elif kind == "consult":
         tasks.append(CONSULT_TASK)
     else:
@@ -979,14 +1073,33 @@ def is_opening(state: Optional[dict], conversation: list[dict]) -> bool:
 
 
 def build_repair_messages(
-    gm_messages: list[dict], reply: str, needs_opening: bool = False
+    gm_messages: list[dict],
+    reply: str,
+    needs_opening: bool = False,
+    needs_arc: bool = False,
 ) -> list[dict]:
     """The pass's messages, its planless reply, and a request for only the plan."""
+    request = (
+        REPAIR_PROMPT
+        + (OPENING_REPAIR if needs_opening else "")
+        + (ARC_REPAIR if needs_arc else "")
+    )
     return [
         *gm_messages,
         {"role": "assistant", "content": reply},
-        {"role": "user", "content": REPAIR_PROMPT + (OPENING_REPAIR if needs_opening else "")},
+        {"role": "user", "content": request},
     ]
+
+
+def plan_has_arc(plan: Optional[dict]) -> bool:
+    """Whether a plan sets out an arc: a destination and at least one milestone."""
+    arc = ((plan or {}).get("update") or {}).get("arc")
+    return (
+        isinstance(arc, dict)
+        and bool(_text(arc.get("destination")))
+        and isinstance(arc.get("milestones"), list)
+        and len(arc["milestones"]) > 0
+    )
 
 
 def _npc_card(npc: dict) -> str:
@@ -1295,7 +1408,7 @@ async def run_gm_pass(
                     since = count_replies_since(messages_map, message_id, prior.message_id)
                     if since < cadence:
                         return None
-                if state is None and kind in ("turn", "consult"):
+                if state is None and kind in ("turn", "consult", "arc"):
                     kind = "setup"
                 before = state
                 # A turn pass follows a written reply, so whoever was entering has
@@ -1349,15 +1462,26 @@ async def run_gm_pass(
                 def lacks_opening(candidate: Optional[dict]) -> bool:
                     return opening_pass and not _text((candidate or {}).get("opening"))
 
-                if plan_needs_repair(state, plan) or lacks_opening(plan):
-                    # One repair turn also covers a missing complete scene roster, and
-                    # an opening pass that forgot the opening scene card.
+                def lacks_arc(candidate: Optional[dict]) -> bool:
+                    # Only a pass asked to plan the arc must produce one.
+                    return kind == "arc" and not plan_has_arc(candidate)
+
+                def incomplete(candidate: Optional[dict]) -> bool:
+                    return lacks_opening(candidate) or lacks_arc(candidate)
+
+                if plan_needs_repair(state, plan) or incomplete(plan):
+                    # One repair turn also covers a missing complete scene roster, an
+                    # opening pass that forgot the opening scene card, and an arc pass
+                    # that came back without an arc.
                     response = await generate_chat_completion(
                         request,
                         form_data={
                             "model": gm_model,
                             "messages": build_repair_messages(
-                                gm_messages, content, needs_opening=lacks_opening(plan)
+                                gm_messages,
+                                content,
+                                needs_opening=lacks_opening(plan),
+                                needs_arc=lacks_arc(plan),
                             ),
                             "stream": False,
                             token_key: MAX_TOKENS,
@@ -1373,9 +1497,9 @@ async def run_gm_pass(
                         model_reasoning = (model_reasoning + "\n\n" + repair_reasoning).strip()
                     _, repaired = parse_gm_reply(repair)
                     # Keep the first plan if the repair is no better: losing a usable
-                    # plan over a missing opening card would be worse than either.
+                    # plan over a missing opening card or arc would be worse than either.
                     if not plan_needs_repair(state, repaired) and (
-                        plan_needs_repair(state, plan) or not lacks_opening(repaired)
+                        plan_needs_repair(state, plan) or not incomplete(repaired)
                     ):
                         plan = repaired
                         log.info("GM plan recovered by a repair turn for chat %s", chat_id)

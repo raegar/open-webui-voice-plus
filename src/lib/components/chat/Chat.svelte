@@ -119,6 +119,7 @@
 	import { syncCharacterState } from '$lib/utils/characterState';
 	import { getGameMasterIndex, openGameMasterStory, updateGameMaster } from '$lib/apis/gamemaster';
 	import GameMasterTranscript from '$lib/components/chat/Controls/GameMasterTranscript.svelte';
+	import GameMasterPlan from '$lib/components/chat/Controls/GameMasterPlan.svelte';
 
 	export let chatIdProp = '';
 
@@ -2906,6 +2907,7 @@
 <audio id="audioElement" src="" style="display: none;"></audio>
 
 <GameMasterTranscript chatId={$chatId} {history} />
+<GameMasterPlan chatId={$chatId} />
 
 <EventConfirmDialog
 	bind:show={showEventConfirmation}

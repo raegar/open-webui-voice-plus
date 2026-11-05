@@ -20,6 +20,7 @@
 		characterStateVersion,
 		config,
 		gameMasterTranscript,
+		gameMasterPlanOpen,
 		gameMasterVersion,
 		gameMasterStartRequest,
 		gameMasterStarting,
@@ -332,7 +333,38 @@
 				>
 					{$i18n.t('Transcript')}
 				</button>
+				<button
+					class="px-2 py-0.5 rounded-lg bg-gray-100 dark:bg-gray-850 hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-50"
+					title={$i18n.t("The GM's whole current plan, covered until you reveal it")}
+					disabled={!current?.state}
+					on:click={() => gameMasterPlanOpen.set(true)}
+				>
+					{$i18n.t('Plan')}
+				</button>
 			</div>
+			{#if current?.state}
+				{@const milestones = current.state.arc?.milestones ?? []}
+				{#if current.state.arc?.destination && milestones.length}
+					<div class="text-gray-500">
+						{$i18n.t('Story arc')}: {$i18n.t('milestone')}
+						{Math.min(
+							milestones.filter((m) => m.status === 'reached').length + 1,
+							milestones.filter((m) => m.status !== 'dropped').length
+						)}
+						{$i18n.t('of')}
+						{milestones.filter((m) => m.status !== 'dropped').length}
+					</div>
+				{:else}
+					<div class="flex items-center gap-2 text-gray-500">
+						<span>{$i18n.t('No story arc yet.')}</span>
+						<button
+							class="underline hover:text-gray-800 dark:hover:text-gray-200 disabled:opacity-50"
+							disabled={status?.running}
+							on:click={() => gameMasterPlanOpen.set(true)}>{$i18n.t('Plan one…')}</button
+						>
+					</div>
+				{/if}
+			{/if}
 
 			{#if status?.last_error}
 				<div class="text-red-600 dark:text-red-400">
