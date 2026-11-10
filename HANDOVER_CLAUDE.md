@@ -242,6 +242,14 @@ A model id must appear in `request.app.state.OPENAI_MODELS` or `/chat/completion
 
 OpenRouter applies request-level fields over preset fields, so OWUI Advanced Params set on these models override whatever the preset specifies — leave them at default. The fork's `character_personality` system-message injection likewise takes precedence over a preset's own system prompt.
 
+## Nano-GPT connection
+
+Nano-GPT (`https://nano-gpt.com/api/v1`) was added on 2026-11-10 as a fallback for when OpenRouter credit runs out. It is OpenAI-compatible and streams reasoning in `delta.reasoning`, which the middleware already reads. Like the OpenRouter connections, it is configured only in the config DB.
+
+- **`prefix_id` is `nano`.** Nano-GPT uses the same `provider/model` ids as OpenRouter (`deepseek/deepseek-v3.2`, `xiaomi/mimo-v2.5`, …). Without a prefix the two connections collide and one hides the other. Its models therefore appear as `nano.<id>`.
+- **`model_ids` is pinned.** Nano-GPT's `/models` sometimes takes 8–10 s, and OWUI gives up on a model list at 10 s (`AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST`). When it times out, every `nano.` model disappears until the next refresh, and chats on them fail with 400. A non-empty `model_ids` skips the fetch. Add new models to that list in the admin UI.
+- **The key is set to Zero Data Retention only.** Models without a ZDR route, such as `google/gemini-4-argon`, return 403 and are missing from the key's `/models` list, although they appear in the public list. The fix is the key's Data Retention setting at nano-gpt.com/api/keys, not anything in OWUI.
+
 ## Verification commands
 
 Run from `C:\\AI\\open-webui-voice-plus`:
