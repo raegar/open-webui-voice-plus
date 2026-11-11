@@ -187,6 +187,9 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 	// drops approval, which clears this, so it always describes the prompt on screen.
 	let approvedSubmissions = 0;
 	let lastSubmittedAt: number | null = null;
+	// Unlike the counter above, editing the prompt does not clear this: it only decides
+	// whether to offer a way back to the chat beside the Generate button.
+	let submittedThisVisit = false;
 	$: if (!promptApproved) {
 		approvedSubmissions = 0;
 		lastSubmittedAt = null;
@@ -1023,7 +1026,7 @@ Write the final MiniMax H3 production brief now.`
 					`Draft ready, but it has ${spokenWords} spoken words for a ${duration}s clip (budget ${budget}). Speech that overruns the clip comes out garbled - trim the dialogue or raise the duration before generating.`
 				);
 			} else if (!avoidedLeft.length) {
-				toast.success('Draft ready. Review and approve it before generating.');
+				toast.success('Draft ready. Review it, then generate.');
 			}
 		} catch (error) {
 			toast.error(`Prompt drafting failed: ${error}`);
@@ -1050,29 +1053,11 @@ Write the final MiniMax H3 production brief now.`
 		return ratio >= 0.8 && ratio <= 1.1 ? repaired : brief;
 	};
 
-	const approvePrompt = () => {
-		if (!productionPrompt.trim()) {
-			toast.error('Write or draft a production prompt first.');
-			return;
-		}
-		promptApproved = true;
-		// Warn rather than repair here: what is approved is exactly what gets sent.
-		const looks = findAvoidedLooks(productionPrompt);
-		if (looks.length) {
-			toast.warning(
-				`Approved, but it mentions ${describeLooks(looks)}, which the video model renders badly.`
-			);
-		}
-		const spokenWords = countSpokenWords(productionPrompt);
-		const budget = speechBudget(duration);
-		if (spokenWords > budget) {
-			toast.warning(
-				`Approved, but ${spokenWords} spoken words is over the ${budget} that fit in ${duration}s. Expect garbled speech.`
-			);
-		} else if (!looks.length) {
-			toast.success('Prompt approved for generation.');
-		}
-	};
+	// Shown live under the prompt, so problems are visible before Generate is pressed.
+	// Warn rather than repair: what is in the box is exactly what gets sent.
+	$: promptLooks = productionPrompt.trim() ? findAvoidedLooks(productionPrompt) : [];
+	$: promptSpokenWords = countSpokenWords(productionPrompt);
+	$: promptSpeechBudget = speechBudget(duration);
 
 	const startElapsedTimer = () => {
 		elapsedSeconds = 0;
@@ -1335,8 +1320,8 @@ Write the final MiniMax H3 production brief now.`
 	};
 
 	const generateVideo = async () => {
-		if (!promptApproved || !productionPrompt.trim()) {
-			toast.error('Review and approve the production prompt first.');
+		if (!productionPrompt.trim()) {
+			toast.error('Write or draft a production prompt first.');
 			return;
 		}
 		if (!framesReady) {
@@ -1458,7 +1443,10 @@ Write the final MiniMax H3 production brief now.`
 				}
 			}
 			const ahead = accepted?.position ?? 0;
+			// Generating approves the prompt as it stands; any later edit resets this.
+			promptApproved = true;
 			approvedSubmissions += 1;
+			submittedThisVisit = true;
 			lastSubmittedAt = Date.now();
 			// Show the seed this job uses; the chat's next generation reuses it until cleared.
 			setSeed(parsedSeed);
@@ -1670,7 +1658,7 @@ Write the final MiniMax H3 production brief now.`
 					<div class="mb-4">
 						<h1 class="text-xl font-semibold">Create a video</h1>
 						<p class="mt-1 text-sm text-gray-500">
-							Shape the idea with a chat model, approve the resulting H3 prompt, then send it to
+							Shape the idea with a chat model, review the resulting H3 prompt, then send it to
 							ComfyUI.
 						</p>
 					</div>
@@ -2183,22 +2171,16 @@ Write the final MiniMax H3 production brief now.`
 						<div>
 							<h2 class="font-semibold">3. Review the production prompt</h2>
 							<p class="mt-0.5 text-xs text-gray-500">
-								Edit anything you want. Edits require approval again.
+								Edit anything you want. What is here when you press Generate is what gets sent.
 							</p>
 						</div>
-						<span
-							class="rounded-full px-2.5 py-1 text-xs {!promptApproved
-								? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
-								: approvedSubmissions > 0
-									? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
-									: 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300'}"
-						>
-							{!promptApproved
-								? 'Needs approval'
-								: approvedSubmissions > 0
-									? 'Submitted'
-									: 'Approved'}
-						</span>
+						{#if promptApproved && approvedSubmissions > 0}
+							<span
+								class="rounded-full bg-blue-100 px-2.5 py-1 text-xs text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+							>
+								Submitted
+							</span>
+						{/if}
 					</div>
 					{#if voicesWithoutDialogue}
 						<div
@@ -2216,41 +2198,49 @@ Write the final MiniMax H3 production brief now.`
 						bind:value={productionPrompt}
 						on:input={markPromptForReview}
 					></textarea>
-					<div class="mt-3 flex justify-end">
-						<button
-							class="rounded-xl border px-4 py-2 text-sm font-medium disabled:cursor-not-allowed {!productionPrompt.trim()
-								? 'border-transparent bg-gray-200 text-gray-500 dark:bg-gray-800 dark:text-gray-500'
-								: !promptApproved
-									? 'border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700'
-									: 'border-gray-300 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-850'}"
-							disabled={!productionPrompt.trim()}
-							on:click={approvePrompt}
+					{#if promptLooks.length || promptSpokenWords > promptSpeechBudget}
+						<ul
+							class="mt-3 list-disc space-y-1 rounded-xl border border-amber-200 bg-amber-50 p-3 pl-7 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
 						>
-							{!promptApproved
-								? 'Approve this prompt'
-								: approvedSubmissions > 0
-									? 'Prompt submitted'
-									: 'Prompt approved'}
-						</button>
-					</div>
+							{#if promptLooks.length}
+								<li>
+									It mentions {describeLooks(promptLooks)}, which the video model renders badly.
+								</li>
+							{/if}
+							{#if promptSpokenWords > promptSpeechBudget}
+								<li>
+									{promptSpokenWords} spoken words is over the {promptSpeechBudget} that fit in {duration}s.
+									Expect garbled speech.
+								</li>
+							{/if}
+						</ul>
+					{/if}
 				</section>
 
 				<section class="rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
 					<h2 class="font-semibold">4. Generate</h2>
-					<button
-						class="mt-4 flex w-full max-w-sm items-center justify-center gap-2 rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
-						disabled={submitting || !promptApproved || !framesReady}
-						on:click={generateVideo}
-					>
-						<VideoCamera className="size-4.5" strokeWidth="2" />
-						{submitting
-							? 'Submitting...'
-							: approvedSubmissions > 0
-								? 'Queue this prompt again'
-								: queueJobs.length
-									? 'Add to queue'
-									: 'Generate video'}
-					</button>
+					<div class="mt-4 flex flex-wrap items-center gap-4">
+						<button
+							class="flex w-full max-w-sm items-center justify-center gap-2 rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
+							disabled={submitting || !productionPrompt.trim() || !framesReady}
+							on:click={generateVideo}
+						>
+							<VideoCamera className="size-4.5" strokeWidth="2" />
+							{submitting
+								? 'Submitting...'
+								: approvedSubmissions > 0
+									? 'Queue this prompt again'
+									: queueJobs.length
+										? 'Add to queue'
+										: 'Generate video'}
+						</button>
+						{#if sceneChatId && submittedThisVisit}
+							<a
+								class="text-sm font-medium text-violet-800 hover:underline dark:text-violet-200"
+								href="/c/{sceneChatId}">Back to chat</a
+							>
+						{/if}
+					</div>
 					{#if promptApproved && approvedSubmissions > 0}
 						<p class="mt-2 text-xs font-medium text-blue-700 dark:text-blue-300">
 							✓ This prompt was submitted {approvedSubmissions === 1
@@ -2299,8 +2289,8 @@ Write the final MiniMax H3 production brief now.`
 						</p>
 					{:else if !framesReady}
 						<p class="mt-2 text-xs text-amber-600">Attach the required frame images.</p>
-					{:else if !promptApproved}
-						<p class="mt-2 text-xs text-gray-500">Approve the production prompt to continue.</p>
+					{:else if !productionPrompt.trim()}
+						<p class="mt-2 text-xs text-gray-500">Draft or write a production prompt to continue.</p>
 					{/if}
 					<div
 						class="mt-5 border-t border-gray-200 pt-4 text-xs leading-5 text-gray-500 dark:border-gray-800"
