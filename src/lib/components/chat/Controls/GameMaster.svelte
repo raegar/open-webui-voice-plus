@@ -24,6 +24,7 @@
 		gameMasterVersion,
 		gameMasterStartRequest,
 		gameMasterStarting,
+		models,
 		pendingChatCharacterIds,
 		pendingGameMaster,
 		user
@@ -62,6 +63,14 @@
 		(hasChat ? status?.config?.player_character_id : pending?.player_character_id) ?? '';
 	$: cadence = (hasChat ? status?.config?.cadence : pending?.cadence) ?? 1;
 	$: autoPortraits = (hasChat ? status?.config?.auto_portraits : pending?.auto_portraits) ?? true;
+	$: gmModel = (hasChat ? status?.config?.model : pending?.model) ?? '';
+	// Workspace models are left out: the GM would strip one to its base model anyway.
+	$: gmModels = ($models ?? []).filter(
+		(m) =>
+			!m?.info?.base_model_id &&
+			!(m?.info?.meta?.hidden ?? false) &&
+			(m as { pipeline?: { type?: string } })?.pipeline?.type !== 'filter'
+	);
 	$: current = status?.current ?? null;
 	// Portraits run on the video pipeline, so they follow its switch and permission.
 	$: canDraw =
@@ -140,6 +149,7 @@
 				player_character_id: pending?.player_character_id ?? '',
 				cadence: pending?.cadence ?? 1,
 				auto_portraits: pending?.auto_portraits ?? true,
+				model: pending?.model ?? '',
 				...changes
 			});
 			return;
@@ -264,6 +274,23 @@
 				<option value="1">{$i18n.t('Every reply')}</option>
 				<option value="2">{$i18n.t('Every 2nd reply (cheaper)')}</option>
 				<option value="3">{$i18n.t('Every 3rd reply (cheapest)')}</option>
+			</select>
+		</div>
+
+		<div class="flex items-center gap-2">
+			<span class="w-24 shrink-0 text-gray-500">{$i18n.t('GM model')}</span>
+			<select
+				class="flex-1 min-w-0 bg-transparent outline-hidden py-0.5"
+				value={gmModel}
+				on:change={(e) => change({ model: e.currentTarget.value })}
+			>
+				<option value="">{$i18n.t('Same as the chat (default)')}</option>
+				{#if gmModel && !gmModels.some((m) => m.id === gmModel)}
+					<option value={gmModel}>{gmModel} ({$i18n.t('unavailable, using the chat model')})</option>
+				{/if}
+				{#each gmModels as model (model.id)}
+					<option value={model.id}>{model.name ?? model.id}</option>
+				{/each}
 			</select>
 		</div>
 

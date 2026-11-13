@@ -220,6 +220,23 @@ def test_gm_uses_the_base_model_behind_a_persona():
     assert resolve_gm_model({"x": {"info": {"base_model_id": "gone"}}}, "x") == "x"
 
 
+def test_gm_model_picked_in_settings_overrides_the_chat_model():
+    models = {
+        "rp-persona": {"info": {"base_model_id": "@preset/rp"}},
+        "@preset/rp": {},
+        "cheap": {},
+        "cheap-persona": {"info": {"base_model_id": "cheap"}},
+    }
+    # Blank keeps the current behaviour.
+    assert resolve_gm_model(models, "rp-persona", "") == "@preset/rp"
+    assert resolve_gm_model(models, "rp-persona", "cheap") == "cheap"
+    # A picked persona is stripped like the chat's own.
+    assert resolve_gm_model(models, "rp-persona", "cheap-persona") == "cheap"
+    # A picked model that has since gone falls back to the chat's model.
+    assert resolve_gm_model(models, "rp-persona", "removed") == "@preset/rp"
+
+
+
 # --- Stages 2-6 ---------------------------------------------------------------
 
 from open_webui.utils.game_master import (  # noqa: E402

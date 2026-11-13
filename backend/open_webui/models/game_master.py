@@ -30,6 +30,8 @@ DEFAULT_CONFIG = {
     "cadence": 1,
     # Generate a portrait when an NPC first comes on stage.
     "auto_portraits": True,
+    # The model the GM runs on; "" means the chat's own model, persona stripped.
+    "model": "",
 }
 
 
@@ -119,7 +121,7 @@ def normalize_config(config: Any) -> dict:
     if merged["cadence"] not in CADENCES:
         merged["cadence"] = DEFAULT_CONFIG["cadence"]
     merged["auto_portraits"] = merged["auto_portraits"] is not False
-    for key in ("agenda", "player_character_id"):
+    for key in ("agenda", "player_character_id", "model"):
         if not isinstance(merged[key], str):
             merged[key] = ""
     return {key: merged[key] for key in DEFAULT_CONFIG}

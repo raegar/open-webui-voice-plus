@@ -67,6 +67,7 @@ export const pendingGameMaster = writable<{
 	player_character_id: string;
 	cadence: 1 | 2 | 3;
 	auto_portraits: boolean;
+	model: string;
 } | null>(null);
 // Which messages have GM passes, for the "steered" markers on replies.
 export const gameMasterIndex = writable<{

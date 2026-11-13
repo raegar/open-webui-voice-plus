@@ -9,6 +9,8 @@ export type GameMasterConfig = {
 	/** Run a turn pass after every Nth reply. */
 	cadence: 1 | 2 | 3;
 	auto_portraits: boolean;
+	/** The model the GM runs on; "" is the chat's own model, persona stripped. */
+	model: string;
 };
 
 export type GameMasterChange = { text: string; spoiler: boolean };

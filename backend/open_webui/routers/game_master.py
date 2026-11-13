@@ -113,6 +113,8 @@ class GameMasterForm(BaseModel):
     player_character_id: Optional[str] = Field(default=None, max_length=200)
     cadence: Optional[Literal[1, 2, 3]] = None
     auto_portraits: Optional[bool] = None
+    # "" goes back to the chat's own model.
+    model: Optional[str] = Field(default=None, max_length=500)
 
 
 @router.post("/chats/{chat_id}")

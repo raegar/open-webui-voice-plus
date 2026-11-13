@@ -1150,12 +1150,15 @@ def render_director_notes(note: str, state: Optional[dict]) -> Optional[str]:
     )
 
 
-def resolve_gm_model(models: dict, model_id: str) -> str:
+def resolve_gm_model(models: dict, model_id: str, override: str = "") -> str:
     """The chat's own model with its persona stripped: the base model if it has one.
 
     A workspace model prepends its own system prompt, which would have the GM run in
-    character, as the outfit tracker once did.
+    character, as the outfit tracker once did. override is the model picked in the
+    GM's settings; it wins while it is still registered, and is stripped the same way.
     """
+    if override and override in models:
+        model_id = override
     model = models.get(model_id) or {}
     base = (model.get("info") or {}).get("base_model_id")
     return base if base and base in models else model_id
@@ -1422,7 +1425,9 @@ async def run_gm_pass(
 
                 await emit({"status": "running"})
                 models = request.app.state.MODELS
-                gm_model = resolve_gm_model(models, model_id)
+                gm_model = resolve_gm_model(
+                    models, model_id, session.config.get("model", "")
+                )
                 if gm_model not in models:
                     raise ValueError(f"Model not found: {gm_model}")
 
@@ -1574,6 +1579,14 @@ async def run_gm_pass(
         _running[chat_id] = max(0, _running.get(chat_id, 1) - 1)
 
 
+def _model_override(user_id: str, chat_id: str) -> str:
+    """The model picked in this chat's GM settings, or "" for the chat's own."""
+    from open_webui.models.game_master import GameMaster
+
+    session = GameMaster.get_session(user_id, chat_id)
+    return session.config.get("model", "") if session else ""
+
+
 def _token_key(models: dict, model_id: str) -> str:
     return "max_tokens" if models[model_id].get("owned_by") == "ollama" else "max_completion_tokens"
 
@@ -1622,7 +1635,9 @@ async def run_table_talk(
                 state = prior.state if prior else None
 
                 models = request.app.state.MODELS
-                gm_model = resolve_gm_model(models, model_id)
+                gm_model = resolve_gm_model(
+                    models, model_id, session.config.get("model", "")
+                )
                 if gm_model not in models:
                     raise ValueError(f"Model not found: {gm_model}")
                 talk_messages = build_talk_messages(
@@ -1768,7 +1783,7 @@ def _can_generate_portraits(request: Any, user: Any) -> bool:
 
 
 async def write_portrait_prompt(
-    request: Any, user: Any, model_id: str, npc: dict, direction: str = ""
+    request: Any, user: Any, model_id: str, npc: dict, direction: str = "", override: str = ""
 ) -> str:
     """An image prompt written for this NPC by the chat's own model.
 
@@ -1786,7 +1801,7 @@ async def write_portrait_prompt(
     fallback = build_portrait_prompt(look)
     try:
         models = request.app.state.MODELS
-        writer = resolve_gm_model(models, model_id) if model_id else ""
+        writer = resolve_gm_model(models, model_id, override) if model_id or override else ""
         if writer not in models:
             return fallback
         response = await generate_chat_completion(
@@ -1886,7 +1901,9 @@ async def queue_npc_portrait(
     async def prepare() -> None:
         nonlocal prompt
         try:
-            prompt = await write_portrait_prompt(request, user, model_id, npc, direction)
+            prompt = await write_portrait_prompt(
+                request, user, model_id, npc, direction, _model_override(user.id, chat_id)
+            )
             GameMaster.set_portrait(user.id, chat_id, npc_id, prompt=prompt)
             await enqueue_comfyui_job(user.id, "portrait", f"Portrait: {name}", runner)
         except Exception as e:
@@ -1953,4 +1970,6 @@ async def get_scene_npcs(
         VideoCharacters.get_for_chat(user.id, chat_id),
     )
     model_id = messages_map[message_id].get("model") or entry.model
-    return await filter_scene_npcs(request, user, model_id, candidates, conversation)
+    return await filter_scene_npcs(
+        request, user, model_id, candidates, conversation, _model_override(user.id, chat_id)
+    )

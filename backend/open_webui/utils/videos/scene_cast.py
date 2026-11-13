@@ -64,7 +64,12 @@ def parse_scene_cast(raw: str, npcs: list[dict]) -> list[dict]:
 
 
 async def filter_scene_npcs(
-    request: Any, user: Any, model_id: str, npcs: list[dict], conversation: list[dict]
+    request: Any,
+    user: Any,
+    model_id: str,
+    npcs: list[dict],
+    conversation: list[dict],
+    override: str = "",
 ) -> list[dict]:
     if not npcs or not conversation or not message_text(conversation[-1]):
         return []
@@ -72,7 +77,7 @@ async def filter_scene_npcs(
         from open_webui.utils.chat import generate_chat_completion
 
         models = request.app.state.MODELS
-        model = resolve_gm_model(models, model_id)
+        model = resolve_gm_model(models, model_id, override)
         if model not in models:
             return []
         response = await generate_chat_completion(

@@ -144,6 +144,7 @@ def test_scene_lookup_stays_on_selected_branch_and_does_not_mutate_the_plan(
     gm = SimpleNamespace(
         get_entry_index=lambda *_: index,
         get_entry=lambda *_: SimpleNamespace(state=state, model="base"),
+        get_session=lambda *_: SimpleNamespace(config={"model": "picked"}),
         get_portraits=lambda *_: [
             SimpleNamespace(npc_id="n1", name="Marek", status="ready", file_id="f1")
         ],
@@ -171,8 +172,10 @@ def test_scene_lookup_stays_on_selected_branch_and_does_not_mutate_the_plan(
         sys.modules, "open_webui.utils.misc", SimpleNamespace(get_message_list=chain)
     )
 
-    async def check(request, user, model_id, candidates, conversation):
+    async def check(request, user, model_id, candidates, conversation, override=""):
         assert model_id == "base"
+        # The model picked in the GM's settings reaches the scene-cast check too.
+        assert override == "picked"
         assert [m["id"] for m in conversation] == ["a1", message_id]
         if attached:
             assert candidates == []
