@@ -431,3 +431,41 @@ def test_astro_realism_loads_in_the_style_slot():
     assert _loras(workflow) == [MOTION_LORA_NAME, "AstroRealism_MiniMax_H3.safetensors"]
     assert workflow["904"]["inputs"]["model"] == ["901", 0]
     assert workflow["904"]["inputs"]["strength_model"] == 1.0
+
+
+def test_unlocked_v3_loads_in_the_motion_slot():
+    workflow = build_minimax_h3_workflow(
+        "p", "9:16", 0.2, 10, 1, motion_lora=True, motion_lora_variant="unlocked_v3"
+    )
+    assert _loras(workflow) == ["Minimax_H3_Unlocked_V3.safetensors"]
+    assert workflow["901"]["inputs"]["model"] == ["105:6", 0]
+
+
+def test_detail_lora_stacks_after_style_and_before_turbo():
+    workflow = build_minimax_h3_reference_workflow(
+        "p",
+        "9:16",
+        0.2,
+        10,
+        1,
+        ["a.png"],
+        motion_lora=True,
+        turbo_lora=True,
+        style_lora="astro_realism",
+        detail_lora="synthp",
+    )
+    assert _loras(workflow) == [
+        MOTION_LORA_NAME,
+        "AstroRealism_MiniMax_H3.safetensors",
+        "SynthP_MinimaxH3_v1.safetensors",
+        TURBO_LORA_NAME,
+    ]
+    assert workflow["905"]["inputs"]["model"] == ["904", 0]
+    assert workflow["902"]["inputs"]["model"] == ["905", 0]
+
+
+def test_detail_lora_alone_takes_the_accelerated_path():
+    workflow = build_minimax_h3_workflow("p", "9:16", 0.2, 10, 1, detail_lora="synthp")
+    assert _loras(workflow) == ["SynthP_MinimaxH3_v1.safetensors"]
+    assert workflow["905"]["inputs"]["model"] == ["105:6", 0]
+    assert workflow["105:9"]["inputs"]["steps"] == 12

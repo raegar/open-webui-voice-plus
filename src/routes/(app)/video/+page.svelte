@@ -154,10 +154,11 @@ Never describe lipstick as smudged or smeared, and never describe skin, cheeks, 
 	// is the speed win and has tested clean. Sampler settings are the same for every
 	// combination, so toggling one changes only which weights load.
 	// Motion slot: off, or one of the interchangeable motion LoRAs.
-	let motionLoraChoice: 'off' | 'hmmotion' | 'm3_unlocked' = 'off';
+	let motionLoraChoice: 'off' | 'hmmotion' | 'm3_unlocked' | 'unlocked_v3' = 'off';
 	$: motionLora = motionLoraChoice !== 'off';
 	// Style slot: a look LoRA that combines with motion and turbo.
 	let styleLoraChoice: 'off' | 'flat_anime' | 'astro_realism' = 'off';
+	let detailLoraChoice: 'off' | 'synthp' = 'off';
 	let turboLora = true;
 	let duration: Duration = 10;
 	let seed: string | number | null = '';
@@ -1371,6 +1372,7 @@ Write the final MiniMax H3 production brief now.`
 				motion_lora: motionLora,
 				...(motionLoraChoice !== 'off' ? { motion_lora_variant: motionLoraChoice } : {}),
 				...(styleLoraChoice !== 'off' ? { style_lora: styleLoraChoice } : {}),
+				...(detailLoraChoice !== 'off' ? { detail_lora: detailLoraChoice } : {}),
 				turbo_lora: turboLora,
 				aspect_ratio: aspectRatio,
 				megapixels,
@@ -2037,6 +2039,16 @@ Write the final MiniMax H3 production brief now.`
 										/>
 										M3 Unlocked V2
 									</label>
+									<label class="flex items-center gap-1.5">
+										<input
+											type="radio"
+											name="motion-lora"
+											value="unlocked_v3"
+											class="size-3.5 accent-gray-700"
+											bind:group={motionLoraChoice}
+										/>
+										Unlocked V3
+									</label>
 								</div>
 								<span class="mt-0.5 block text-gray-500">
 									More motion. One at a time, strength 1.0.
@@ -2083,8 +2095,36 @@ Write the final MiniMax H3 production brief now.`
 									{/if}
 								</span>
 							</fieldset>
+							<fieldset class="text-xs">
+								<legend class="font-medium">Detail LoRA</legend>
+								<div class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+									<label class="flex items-center gap-1.5">
+										<input
+											type="radio"
+											name="detail-lora"
+											value="off"
+											class="size-3.5 accent-gray-700"
+											bind:group={detailLoraChoice}
+										/>
+										Off
+									</label>
+									<label class="flex items-center gap-1.5">
+										<input
+											type="radio"
+											name="detail-lora"
+											value="synthp"
+											class="size-3.5 accent-gray-700"
+											bind:group={detailLoraChoice}
+										/>
+										SynthP
+									</label>
+								</div>
+								<span class="mt-0.5 block text-gray-500">
+									Subject detail. Stacks with motion, style and turbo. Strength 1.0.
+								</span>
+							</fieldset>
 							<p class="text-[11px] text-gray-500">
-								{motionLora || turboLora || styleLoraChoice !== 'off'
+								{motionLora || turboLora || styleLoraChoice !== 'off' || detailLoraChoice !== 'off'
 									? 'euler / 12 steps / shift 6 — the same for every combination, so switching one changes only which weights load.'
 									: 'All off: the original 20-step res_multistep result.'}
 							</p>

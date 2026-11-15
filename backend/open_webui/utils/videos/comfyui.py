@@ -27,6 +27,13 @@ MOTION_LORA_NAME = "hmmotion_minimax-h3_epoch12.safetensors"
 MOTION_LORAS = {
     "hmmotion": (MOTION_LORA_NAME, 1.0, "Load hmmotion LoRA"),
     "m3_unlocked": ("M3_Unlocked_V2.safetensors", 1.0, "Load M3 Unlocked LoRA"),
+    # V3 is the same MidLAB LoRA retrained: still no recommended strength, but it
+    # now covers attn qkv/out as well as mlp fc1/fc2, in 26 of the 50 blocks.
+    "unlocked_v3": (
+        "Minimax_H3_Unlocked_V3.safetensors",
+        1.0,
+        "Load Unlocked V3 LoRA",
+    ),
 }
 DEFAULT_MOTION_LORA_VARIANT = "hmmotion"
 # Style LoRAs change the look rather than the motion, so they get their own slot and
@@ -44,6 +51,14 @@ STYLE_LORAS = {
         "Load Astro Realism LoRA",
     ),
 }
+# Detail LoRAs teach subject matter rather than a look or motion, so they get a
+# third slot and stack with both of the others. SynthP is an ai-toolkit export
+# (diffusion_model.* lora_A/lora_B keys), which ComfyUI's generic key map loads;
+# it covers attn and mlp in all 50 blocks plus the token refiner, and ships no
+# recommended strength or trigger word.
+DETAIL_LORAS = {
+    "synthp": ("SynthP_MinimaxH3_v1.safetensors", 1.0, "Load SynthP LoRA"),
+}
 TURBO_LORA_NAME = "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
 TURBO_LORA_STRENGTH = 0.5
 # Sampler settings recommended alongside the hmmotion LoRA.
@@ -57,6 +72,7 @@ _LORA_MOTION_NODE = "901"
 _LORA_TURBO_NODE = "902"
 _SHIFT_NODE = "903"
 _LORA_STYLE_NODE = "904"
+_LORA_DETAIL_NODE = "905"
 
 
 def apply_motion_loras(
@@ -69,6 +85,7 @@ def apply_motion_loras(
     turbo_lora: bool = True,
     motion_lora_variant: str = DEFAULT_MOTION_LORA_VARIANT,
     style_lora: Optional[str] = None,
+    detail_lora: Optional[str] = None,
 ) -> dict:
     """Splice the requested LoRAs and a sigma shift between the UNet and the nodes
     that consume it, then switch the sampler to the accelerated settings.
@@ -82,7 +99,9 @@ def apply_motion_loras(
     """
     if style_lora is not None and style_lora not in STYLE_LORAS:
         raise ValueError(f"Unknown style LoRA: {style_lora}")
-    if not motion_lora and not turbo_lora and not style_lora:
+    if detail_lora is not None and detail_lora not in DETAIL_LORAS:
+        raise ValueError(f"Unknown detail LoRA: {detail_lora}")
+    if not motion_lora and not turbo_lora and not style_lora and not detail_lora:
         return workflow
     if motion_lora and motion_lora_variant not in MOTION_LORAS:
         raise ValueError(f"Unknown motion LoRA: {motion_lora_variant}")
@@ -112,6 +131,18 @@ def apply_motion_loras(
             "_meta": {"title": title},
         }
         source = [_LORA_STYLE_NODE, 0]
+    if detail_lora:
+        lora_name, strength, title = DETAIL_LORAS[detail_lora]
+        workflow[_LORA_DETAIL_NODE] = {
+            "inputs": {
+                "model": source,
+                "lora_name": lora_name,
+                "strength_model": strength,
+            },
+            "class_type": "LoraLoaderModelOnly",
+            "_meta": {"title": title},
+        }
+        source = [_LORA_DETAIL_NODE, 0]
     if turbo_lora:
         workflow[_LORA_TURBO_NODE] = {
             "inputs": {
@@ -161,6 +192,7 @@ def build_minimax_h3_workflow(
     turbo_lora: bool = False,
     motion_lora_variant: str = DEFAULT_MOTION_LORA_VARIANT,
     style_lora: Optional[str] = None,
+    detail_lora: Optional[str] = None,
 ) -> dict:
     try:
         width, height = RESOLUTIONS[(aspect_ratio, megapixels)]
@@ -315,6 +347,7 @@ def build_minimax_h3_workflow(
         turbo_lora,
         motion_lora_variant,
         style_lora,
+        detail_lora,
     )
 
     return workflow
@@ -332,6 +365,7 @@ def build_minimax_h3_reference_workflow(
     turbo_lora: bool = False,
     motion_lora_variant: str = DEFAULT_MOTION_LORA_VARIANT,
     style_lora: Optional[str] = None,
+    detail_lora: Optional[str] = None,
 ) -> dict:
     """Build the official MiniMax H3 Ref2VA image-reference graph."""
     if not 1 <= len(reference_image_names) <= 9:
@@ -500,6 +534,7 @@ def build_minimax_h3_reference_workflow(
         turbo_lora,
         motion_lora_variant,
         style_lora,
+        detail_lora,
     )
 
     return workflow
@@ -591,6 +626,7 @@ class ComfyUIVideoClient:
         turbo_lora: bool = False,
         motion_lora_variant: str = DEFAULT_MOTION_LORA_VARIANT,
         style_lora: Optional[str] = None,
+        detail_lora: Optional[str] = None,
     ) -> tuple[bytes, str, str]:
         first_frame_name = await self.upload_image(*first_frame) if first_frame else None
         last_frame_name = await self.upload_image(*last_frame) if last_frame else None
@@ -617,6 +653,7 @@ class ComfyUIVideoClient:
                 turbo_lora,
                 motion_lora_variant=motion_lora_variant,
                 style_lora=style_lora,
+                detail_lora=detail_lora,
             )
         else:
             workflow = build_minimax_h3_workflow(
@@ -631,6 +668,7 @@ class ComfyUIVideoClient:
                 turbo_lora,
                 motion_lora_variant=motion_lora_variant,
                 style_lora=style_lora,
+                detail_lora=detail_lora,
             )
         response = await self._request(
             "POST",

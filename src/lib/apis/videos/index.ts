@@ -19,9 +19,11 @@ export type VideoGenerationOptions = {
 	reference_audio_data_urls?: string[];
 	reference_audio_file_ids?: string[];
 	motion_lora?: boolean;
-	motion_lora_variant?: 'hmmotion' | 'm3_unlocked';
+	motion_lora_variant?: 'hmmotion' | 'm3_unlocked' | 'unlocked_v3';
 	// Look LoRA in its own slot; combines with motion and turbo.
 	style_lora?: 'flat_anime' | 'astro_realism';
+	// Subject-matter LoRA in a third slot; stacks with motion, style and turbo.
+	detail_lora?: 'synthp';
 	turbo_lora?: boolean;
 };
 
