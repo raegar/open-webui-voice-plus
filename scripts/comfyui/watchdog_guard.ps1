@@ -19,7 +19,19 @@
       the process holding the port and relaunches. One slow tick during a heavy
       render is never enough.
 
-    Restarts and failed checks are logged to user\watchdog.log beside ComfyUI's log.
+    It also frees idle VRAM. ComfyUI keeps its models in video memory after a job
+    finishes, with no timeout. On 2026-11-19 an idle ComfyUI held about 13 GB of a
+    16 GB card for days, which starved games (RTX Remix fell back to paging
+    textures every frame). Stopping ComfyUI by hand does not help either: this
+    guard relaunches it within 5 minutes. So once ComfyUI has had nothing queued
+    and finished nothing new for IdleMinutesBeforeUnload, and its process holds at
+    least UnloadThresholdMB of dedicated VRAM, the guard POSTs /free to unload the
+    models. That happens once per idle spell. The next job reloads them, which
+    costs a little time on the first render after a quiet spell.
+    Set IdleMinutesBeforeUnload to 0 to turn this off.
+
+    Restarts, failed checks and unloads are logged to user\watchdog.log beside
+    ComfyUI's log.
 #>
 param(
     # Overridable so the guard can be tested without touching ComfyUI: point it at
@@ -30,6 +42,12 @@ param(
     [int]$FailuresBeforeRestart = 3,
     # A process this young is still starting up; leave it alone.
     [int]$StartupGraceMinutes = 10,
+    # Idle unload. With the 5-minute tick, models go 10 to 15 minutes after the
+    # last job. 0 disables it.
+    [int]$IdleMinutesBeforeUnload = 10,
+    # Below this, ComfyUI is holding little more than its CUDA context (about
+    # 200 MB when empty), so there is nothing worth freeing.
+    [int]$UnloadThresholdMB = 1024,
     [string]$StateDir = (Join-Path $PSScriptRoot 'user')
 )
 
@@ -43,12 +61,103 @@ function Write-GuardLog([string]$message) {
     } catch {}
 }
 
+# State is one JSON object shared by the hang check (failures) and the idle
+# unload (lastBusy, lastPromptId, unloaded). Each writer keeps the other's keys.
+function Get-State {
+    $state = @{ failures = 0; lastBusy = $null; lastPromptId = $null; unloaded = $false }
+    try {
+        $saved = Get-Content -Path $statePath -Raw | ConvertFrom-Json
+        foreach ($property in $saved.PSObject.Properties) { $state[$property.Name] = $property.Value }
+    } catch {}
+    return $state
+}
+
+function Save-State([hashtable]$state) {
+    try { ($state | ConvertTo-Json) | Set-Content -Path $statePath } catch {}
+}
+
 function Get-Failures {
-    try { return [int](Get-Content -Path $statePath -Raw | ConvertFrom-Json).failures } catch { return 0 }
+    return [int](Get-State).failures
 }
 
 function Set-Failures([int]$count) {
-    try { (@{ failures = $count } | ConvertTo-Json) | Set-Content -Path $statePath } catch {}
+    $state = Get-State
+    $state.failures = $count
+    Save-State $state
+}
+
+function Invoke-Api([string]$path, [string]$method = 'GET', [string]$body = $null) {
+    $request = @{
+        Uri = "http://127.0.0.1:${Port}$path"
+        Method = $method
+        UseBasicParsing = $true
+        TimeoutSec = $HttpTimeoutSec
+    }
+    if ($body) {
+        $request.Body = $body
+        $request.ContentType = 'application/json'
+    }
+    return Invoke-WebRequest @request
+}
+
+function Get-ProcessVramMB([int]$processId) {
+    # Dedicated VRAM held by one process, from the same counters Task Manager's
+    # GPU columns use. Returns $null if the counters cannot be read.
+    try {
+        $samples = (Get-Counter '\GPU Process Memory(*)\Dedicated Usage' -ErrorAction Stop).CounterSamples |
+            Where-Object { $_.InstanceName -like "pid_${processId}_*" }
+        return [int](($samples | Measure-Object -Property CookedValue -Sum).Sum / 1MB)
+    } catch {
+        return $null
+    }
+}
+
+function Invoke-IdleUnload([int]$processId) {
+    if ($IdleMinutesBeforeUnload -le 0) { return }
+    $state = Get-State
+    $now = Get-Date
+
+    # Busy: anything running or waiting, or a job finished since the last tick.
+    # The history check catches short jobs (portraits take seconds) that start
+    # and finish between two ticks without ever being seen in the queue.
+    $queue = (Invoke-Api '/queue').Content | ConvertFrom-Json
+    $history = (Invoke-Api '/history?max_items=1').Content | ConvertFrom-Json
+    $newestPromptId = @($history.PSObject.Properties.Name)[0]
+    $busy = (@($queue.queue_running).Count -gt 0) -or (@($queue.queue_pending).Count -gt 0) -or
+        ($newestPromptId -and $newestPromptId -ne $state.lastPromptId)
+    $state.lastPromptId = $newestPromptId
+
+    if ($busy -or -not $state.lastBusy) {
+        # No lastBusy yet means the guard has just started tracking (first run, or
+        # ComfyUI relaunched with an empty history). Start the idle clock now
+        # rather than unloading on the first tick.
+        $state.lastBusy = $now.ToString('o')
+        $state.unloaded = $false
+        Save-State $state
+        return
+    }
+
+    $idleMinutes = ($now - [datetime]$state.lastBusy).TotalMinutes
+    if ($state.unloaded -or $idleMinutes -lt $IdleMinutesBeforeUnload) {
+        Save-State $state
+        return
+    }
+
+    $vramMB = Get-ProcessVramMB $processId
+    if ($null -ne $vramMB -and $vramMB -lt $UnloadThresholdMB) {
+        # Already small. Do not mark it unloaded: if a later job loads models
+        # again, the history check starts a new idle spell anyway.
+        Save-State $state
+        return
+    }
+
+    # ComfyUI sets flags here, and its worker unloads straight away when idle.
+    # A job queued at the same moment runs after the unload and reloads models.
+    Invoke-Api '/free' 'POST' '{"unload_models": true, "free_memory": true}' | Out-Null
+    $held = if ($null -eq $vramMB) { 'an unknown amount of' } else { "$vramMB MB of" }
+    Write-GuardLog ("idle for {0:N0} min holding {1} VRAM: asked ComfyUI to unload its models" -f $idleMinutes, $held)
+    $state.unloaded = $true
+    Save-State $state
 }
 
 function Test-Answering {
@@ -81,7 +190,12 @@ try {
             $previous = Get-Failures
             if ($previous -gt 0) { Write-GuardLog "answering again after $previous unanswered check(s)" }
             Set-Failures 0
-            exit 0  # serving; nothing to do
+            try {
+                Invoke-IdleUnload $listening[0].OwningProcess
+            } catch {
+                Write-GuardLog "idle unload check failed: $($_.Exception.Message)"
+            }
+            exit 0  # serving
         }
 
         $ownerId = $listening[0].OwningProcess
